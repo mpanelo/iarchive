@@ -3,8 +3,8 @@
 .SYNOPSIS
 Run quality checks and synthetic CLI tests, optionally on selected drives.
 .PARAMETER ExternalDrives
-Drive roots only, such as 'D:', 'E:'. Creates fresh iarchive-test-* directories
-beside existing folders. No existing archive is scanned or modified.
+Drive roots only, such as 'D:', 'E:'. Creates fresh iarchive-sandbox\run-* directories
+on explicitly selected volumes. No existing archive is scanned or modified.
 .PARAMETER SmokeOnly
 Reuse a release build after the full checks have already passed. Automated
 checks are explicitly marked skipped in the summary.
@@ -23,11 +23,14 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $oldWorkerRequirement = $env:IARCHIVE_REQUIRE_WORKER_TESTS
 $oldConsoleEncoding = [Console]::OutputEncoding
 $runRoot = $null
+$environment = $null
 Push-Location $repoRoot
 try {
     Assert-WindowsHost
     [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-    Require-Application uv
+    $environment = Enter-ProjectEnvironment $repoRoot
+    Write-Host "Project tools and caches: $($environment.root)"
+    Assert-UvVersion
     $driveRoots = @()
     foreach ($drive in $ExternalDrives) {
         $root = Get-ExternalDriveRoot $drive
@@ -56,7 +59,7 @@ try {
     $local = New-FreshDirectory (Join-Path $runRoot 'local smoke test')
     $results = @(Invoke-SyntheticSmoke $exe $local $local)
     foreach ($root in $driveRoots) {
-        $mediaParent = New-FreshDirectory (Join-Path $root "iarchive-test-$runId")
+        $mediaParent = Get-DriveTestDirectory $root $runId
         Write-Host "Testing generated media only: $mediaParent"
         $artifacts = New-FreshDirectory (Join-Path $runRoot ("drive-" + $root.Substring(0, 1)))
         $results += Invoke-SyntheticSmoke $exe $mediaParent $artifacts
@@ -64,6 +67,8 @@ try {
     Write-JsonFile (Join-Path $runRoot 'summary.json') ([pscustomobject]@{
         passed = $true
         automated_checks = $(if ($SmokeOnly) { 'SKIPPED (SmokeOnly)' } else { 'PASSED' })
+        project_tools = $environment.root
+        checkout = $repoRoot
         powershell = $PSVersionTable.PSVersion.ToString()
         smoke_tests = $results
         physical_drive_identity = 'NOT VERIFIED'
@@ -81,6 +86,7 @@ try {
     Write-Error $_.Exception.Message -ErrorAction Continue
     exit 1
 } finally {
+    Restore-ProjectEnvironment $environment
     $env:IARCHIVE_REQUIRE_WORKER_TESTS = $oldWorkerRequirement
     [Console]::OutputEncoding = $oldConsoleEncoding
     Pop-Location

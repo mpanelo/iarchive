@@ -56,7 +56,7 @@ target/release/iarchive --state-dir .smoke/demo-state export-manifest --cycle de
 
 The example uses macOS shell syntax. See the [Windows PowerShell instructions](docs/CLI.md#windows-11-x64--powershell) for Windows builds and commands.
 
-Windows users can also use the [setup and test scripts](docs/windows-testing.md). Run `scripts\windows\setup.ps1`, then `scripts\windows\test.ps1`. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
+Windows users can use the [setup and test scripts](docs/windows-testing.md) from a dedicated checkout such as `C:\iarchive-sandbox\repo`. The guide includes Windows Sandbox instructions for isolation from the host system. Run `scripts\windows\setup.ps1`, then `scripts\windows\test.ps1`. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
 
 `report` displays saved candidate groups, image measurements, errors, and preview paths. Open the preview JPEGs in a local image viewer. The fixture generator and manifest exporter refuse to overwrite existing destinations; use fresh paths when repeating the demo.
 

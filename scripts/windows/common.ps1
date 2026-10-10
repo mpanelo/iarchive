@@ -9,7 +9,7 @@ function Assert-WindowsHost {
 function Require-Application {
     param([string]$Name)
     if (-not (Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue)) {
-        throw "Missing $Name. Run scripts\windows\setup.ps1 -InstallPrerequisites or install the prerequisites manually."
+        throw "Missing $Name. Install prerequisites in your chosen Windows environment; see docs/windows-testing.md."
     }
 }
 
@@ -20,6 +20,13 @@ function Invoke-CheckedNative {
     if ($LASTEXITCODE -ne 0) {
         throw "$Program failed with exit code $LASTEXITCODE."
     }
+}
+
+function Assert-UvVersion {
+    Require-Application uv
+    $version = @(& uv --version) -join ' '
+    Assert-Check ($LASTEXITCODE -eq 0 -and $version -match '^uv (\d+\.\d+\.\d+)') 'Cannot determine uv version.'
+    Assert-Check ([version]$Matches[1] -ge [version]'0.12.3') 'Use uv 0.12.3 or newer for isolated Python installation settings.'
 }
 
 function Assert-SafeDirectory {
@@ -53,6 +60,81 @@ function New-FreshDirectory {
     }
     New-Item -ItemType Directory -Path $full -ErrorAction Stop | Out-Null
     return $full
+}
+
+function Restore-ProjectEnvironment {
+    param($Context)
+    if ($null -ne $Context) {
+        foreach ($name in $Context.previous.Keys) {
+            if ($null -eq $Context.previous[$name]) {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                Set-Item -LiteralPath "Env:$name" -Value $Context.previous[$name]
+            }
+        }
+    }
+}
+
+function Enter-ProjectEnvironment {
+    param([string]$RepoRoot)
+    $repo = Assert-SafeDirectory $RepoRoot
+    $base = Assert-SafeDirectory (Join-Path $repo '.windows-sandbox')
+    $directories = @{
+        CARGO_HOME = (Join-Path $base 'cargo')
+        CARGO_INSTALL_ROOT = (Join-Path $base 'cargo')
+        RUSTUP_HOME = (Join-Path $base 'rustup')
+        UV_CACHE_DIR = (Join-Path $base 'uv-cache')
+        UV_PYTHON_INSTALL_DIR = (Join-Path $base 'python')
+        UV_PYTHON_BIN_DIR = (Join-Path $base 'python-bin')
+        UV_PROJECT_ENVIRONMENT = (Join-Path $repo 'image-worker\.venv')
+        CARGO_TARGET_DIR = (Join-Path $repo 'target')
+        TEMP = (Join-Path $base 'temp')
+        TMP = (Join-Path $base 'temp')
+        TMPDIR = (Join-Path $base 'temp')
+    }
+    # Inspect every destination before making any changes or launching tools.
+    foreach ($path in $directories.Values) { $null = Assert-SafeDirectory $path }
+    $null = Assert-SafeDirectory (Join-Path $repo '.smoke')
+    foreach ($path in ($directories.Values | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            New-Item -ItemType Directory -Path $path | Out-Null
+        }
+    }
+    $values = $directories.Clone()
+    $values.RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
+    $values.UV_MANAGED_PYTHON = 'true'
+    $values.UV_PYTHON_INSTALL_REGISTRY = 'false'
+    $values.UV_PYTHON_NO_REGISTRY = 'true'
+    $values.UV_PYTHON_INSTALL_BIN = 'false'
+    $values.PATH = (Join-Path $directories.CARGO_HOME 'bin') + [IO.Path]::PathSeparator + $env:PATH
+    $context = [pscustomobject]@{ root = $base; previous = @{} }
+    try {
+        foreach ($name in $values.Keys) {
+            $context.previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, $values[$name], 'Process')
+        }
+        return $context
+    } catch {
+        Restore-ProjectEnvironment $context
+        throw
+    }
+}
+
+function Get-DriveTestDirectory {
+    param([string]$DriveRoot, [string]$RunId)
+    Assert-Check ($RunId -match '^[a-f0-9]{32}$') 'Invalid test run identifier.'
+    $base = Assert-SafeDirectory (Join-Path $DriveRoot 'iarchive-sandbox')
+    $marker = Join-Path $base '.iarchive-test-root'
+    if (Test-Path -LiteralPath $base) {
+        $item = Get-Item -LiteralPath $marker -Force
+        Assert-Check (-not $item.PSIsContainer -and
+            -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'Unsafe drive test marker.'
+        Assert-Check ([IO.File]::ReadAllText($marker) -ceq 'iarchive synthetic drive tests v1') "Unrecognized test directory: $base"
+    } else {
+        $null = New-FreshDirectory $base
+        [IO.File]::WriteAllText($marker, 'iarchive synthetic drive tests v1')
+    }
+    return New-FreshDirectory (Join-Path $base "run-$RunId")
 }
 
 function Get-ExternalDriveRoot {
@@ -142,6 +224,33 @@ function Test-ScriptGuards {
     try { Invoke-CheckedNative $env:ComSpec @('/c', 'exit', '7') } catch { $refused = $true }
     Assert-Check $refused 'Native command failure did not stop execution.'
     $guards = New-FreshDirectory (Join-Path $Root 'guards')
+    $environmentRepo = New-FreshDirectory (Join-Path $guards 'environment repo')
+    $originalCargo = $env:CARGO_HOME
+    $originalPath = $env:PATH
+    $originalTemp = $env:TEMP
+    $originalRegistry = $env:UV_PYTHON_INSTALL_REGISTRY
+    $nestedEnvironment = $null
+    try {
+        $nestedEnvironment = Enter-ProjectEnvironment $environmentRepo
+        Assert-Check ($env:CARGO_HOME -eq (Join-Path $environmentRepo '.windows-sandbox\cargo')) 'Cargo escaped the project environment.'
+        Assert-Check ($env:TEMP -eq (Join-Path $environmentRepo '.windows-sandbox\temp')) 'Temporary files escaped the project environment.'
+        Assert-Check ($env:UV_PYTHON_INSTALL_REGISTRY -eq 'false') 'Python registry registration was enabled.'
+        # Exercise the same finally path used after failed native commands.
+        Invoke-CheckedNative $env:ComSpec @('/c', 'exit', '7')
+        throw 'Expected native command failure.'
+    } catch {
+        Assert-Check ($_.Exception.Message -match 'failed with exit code 7') 'Unexpected environment guard failure.'
+    } finally {
+        Restore-ProjectEnvironment $nestedEnvironment
+    }
+    Assert-Check ($env:CARGO_HOME -eq $originalCargo -and $env:PATH -eq $originalPath -and
+        $env:TEMP -eq $originalTemp -and $env:UV_PYTHON_INSTALL_REGISTRY -eq $originalRegistry) 'Process environment was not restored after failure.'
+    $driveFixture = New-FreshDirectory (Join-Path $guards 'drive')
+    $unmarked = New-FreshDirectory (Join-Path $driveFixture 'iarchive-sandbox')
+    $refused = $false
+    try { $null = Get-DriveTestDirectory $driveFixture ([guid]::NewGuid().ToString('N')) } catch { $refused = $true }
+    Assert-Check $refused 'An existing unmarked directory was accepted for drive tests.'
+    Assert-Check (@(Get-ChildItem -LiteralPath $unmarked -Force).Count -eq 0) 'Drive guard modified an existing directory.'
     $fixture = New-FreshDirectory (Join-Path $guards 'fixture')
     $outside = New-FreshDirectory (Join-Path $guards 'outside')
     [IO.File]::WriteAllText((Join-Path $outside 'synthetic.txt'), 'outside synthetic fixture')

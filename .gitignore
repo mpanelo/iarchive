@@ -2,6 +2,7 @@
 /.cargo-home/
 /.uv-cache/
 /.smoke/
+/.windows-sandbox/
 __pycache__/
 .pytest_cache/
 .venv/

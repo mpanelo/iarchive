@@ -59,4 +59,6 @@ uv run --locked --project image-worker python -m unittest discover -s tests -v
 
 CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows, plus dependency policy checks on Linux. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes; CI must use these locks rather than resolving new versions. Review cargo-deny findings and document any narrow exceptions in deny.toml. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.
 
+Windows scripts use a dedicated checkout with project tools and temporary files in `.windows-sandbox`, process-only environment settings, and no automatic system installers. Use Windows Sandbox or a disposable VM when host isolation is required; a directory alone is not an OS sandbox. External-drive tests require explicit drive arguments and use only fresh synthetic runs beneath a marked `iarchive-sandbox` directory. See [Windows setup and testing](docs/windows-testing.md).
+
 See docs/CLI.md for a synthetic smoke test and docs/safety.md for scope limits.
