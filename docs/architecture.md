@@ -4,7 +4,7 @@
 
 The implementation uses four workspace crates. The binary package is `iarchive` in `crates/iarchive-cli`; libraries are `iarchive-core`, `iarchive-store`, and `iarchive-fs`. Cloud operations and review decisions are not implemented. `CloudProvider` exposes inventory only and its supplied implementation returns an error. There is no destructive provider method or CLI route.
 
-Rust 2024 with a declared minimum Rust 1.85, bundled rusqlite, serde/TOML, clap, tracing, walkdir, fs2, SHA-256, and Unicode NFC normalization are the selected libraries. These selections have not yet been dependency-resolved or fully compiled in this sandbox. The minimum compiler version also needs a CI check after resolution; current CI validates stable Rust.
+Rust 2024 with a declared minimum Rust 1.85, bundled rusqlite, serde/TOML, clap, tracing, walkdir, fs2, SHA-256, and Unicode NFC normalization are the selected libraries. Committed lockfiles record the resolved dependencies. The declared minimum compiler version still needs a separate compatibility check; current CI validates stable Rust.
 
 `StorageProvider` streams file facts to one SQLite writer. `ImageAnalyzer` isolates a replaceable worker. Paths are canonical root hints plus cycle ID and slash-separated relative paths. Absolute paths are hints for the current mount, not permanent drive identity. Windows reparse points and Unix symlinks are explicit errors and are never descended. Non-Unicode/non-portable colon/backslash components stop traversal with a scan issue rather than being silently normalized to another name. Windows reserved names/long paths generate portability warnings; case/NFC collisions block inventory completion.
 
@@ -20,7 +20,7 @@ The JSONL export streams from SQLite, includes a versioned summary and all file 
 
 ## Worker and audit
 
-Python requires 3.12–3.14 and uses Pillow, pillow-heif, ImageHash, and NumPy. Dependencies are declared in a uv project. The initial uv.lock is pending dependency access; do not invent hashes or claim compatibility has been validated. [pillow-heif's official plugin documentation](https://pillow-heif.readthedocs.io/en/latest/pillow-plugin.html) documents registration and HEIF image opening.
+Python requires 3.12–3.14 and uses Pillow, pillow-heif, ImageHash, and NumPy. Dependencies are declared in a uv project and resolved in the committed uv.lock. [pillow-heif's official plugin documentation](https://pillow-heif.readthedocs.io/en/latest/pillow-plugin.html) documents registration and HEIF image opening.
 
 Create the venv with uv, then Rust executes that venv's Python directly from the worker project. This is a deliberate execution detail: killing `uv run` alone can leave a child decoder alive on Windows. Direct execution gives a timeout for the actual decoder. No shell strings are interpolated. Each invocation processes one file; the Python JSONL service supports bounded batches up to 64. Per-file startup is slower than a resident worker, but isolates native decoder crashes and caps memory. A persistent bounded-batch adapter is a future performance improvement.
 
@@ -34,7 +34,7 @@ Audit refreshes membership before analysis and deeply hashes every image before/
 
 ## Known limits and unverified work
 
-- Cargo.lock/uv.lock, full clippy/tests, HEIC wheels, and Windows/macOS CI results are pending network-enabled validation. CI currently bootstraps missing locks and uploads them; commit validated locks and remove bootstrap before release.
+- CI uses committed locks, checks Rust formatting and Clippy, and runs Rust/Python tests with HEIC on macOS and Windows. Dependency advisory, license, version, and source checks run separately on Linux. These synthetic checks do not prove real-drive archive safety.
 - Doctor reports free space, availability, permission metadata, optional tool checks, and worker readiness. It does not prove separate physical disks or exercise archive writes. `icloudpd` installations available only through uvx remain unverified; no upstream install/download/auth is launched by doctor. Version 1.32.3 is a candidate pin from the handoff, not a compatibility claim.
 - No native volume/filesystem identity API or swapped-drive binding is implemented. Drive identity, capacity guards, and independent physical disks are not proven by the current commands.
 - Classification uses extension, not MIME/content metadata. Capture timestamps, ContentIdentifier, original/edited labels and Live Photo/RAW relationships remain unknown. Each file variant stays independent.

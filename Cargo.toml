@@ -23,6 +23,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 unicode-normalization = "0.1"
 walkdir = "2"
-iarchive-core = { path = "crates/iarchive-core" }
-iarchive-fs = { path = "crates/iarchive-fs" }
-iarchive-store = { path = "crates/iarchive-store" }
+iarchive-core = { version = "0.1.0", path = "crates/iarchive-core" }
+iarchive-fs = { version = "0.1.0", path = "crates/iarchive-fs" }
+iarchive-store = { version = "0.1.0", path = "crates/iarchive-store" }

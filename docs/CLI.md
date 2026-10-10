@@ -4,23 +4,24 @@ Run from the repository root. Requirements: stable Rust/Cargo, uv, Python 3.12â€
 
 ## Bootstrap and checks on macOS
 
-Initial lockfiles could not be generated in the sandbox. On a network-enabled development host:
+Use the committed lockfiles. On a network-enabled development host:
 
 ```sh
 export CARGO_HOME="$PWD/.cargo-home"
 export UV_CACHE_DIR="$PWD/.uv-cache"
-cargo generate-lockfile
-uv lock --project image-worker
+rustup component add rustfmt clippy
+cargo install --locked cargo-deny --version 0.20.2
 uv sync --locked --project image-worker --group dev
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
+cargo deny --locked --all-features check
 uv run --locked --project image-worker --group dev pytest image-worker/tests
 uv run --locked --project image-worker python -m unittest discover -s tests -v
 cargo build --release --locked
 ```
 
-Review and commit the resolved locks after the platform tests pass. If Python dependencies are absent, raw import/index/export still work. The Rust worker integration test requires the uv venv; CI sets `IARCHIVE_REQUIRE_WORKER_TESTS=1` to prevent skipping it.
+Update lockfiles deliberately alongside dependency changes; see [development tooling](development.md). If Python dependencies are absent, raw import/index/export still work. The Rust worker integration test requires the uv venv; CI sets `IARCHIVE_REQUIRE_WORKER_TESTS=1` to prevent skipping it.
 
 ## Synthetic scan and reports
 
@@ -63,11 +64,9 @@ Default state comes from `directories::ProjectDirs`: `%LOCALAPPDATA%\iarchive\da
 
 ## Windows 11 x64 / PowerShell
 
-Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows execution has not been exercised in this macOS sandbox.
+Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI; real external-drive workflows still need separate runtime checks.
 
 ```powershell
-cargo generate-lockfile
-uv lock --project image-worker
 uv sync --locked --project image-worker --group dev --python 3.12
 cargo build --release --locked
 uv run --locked --project image-worker python fixtures/generate.py --output .smoke\windows-media --clean --with-heic

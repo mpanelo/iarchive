@@ -42,17 +42,21 @@ Document the commit message convention
 
 ## Checks
 
+Use rustfmt's standard Rust 2024 style and the Rust API Guidelines for public APIs. Run Clippy with warnings treated as errors; enable stricter lints selectively rather than enabling entire pedantic or restriction groups. See [development tooling](docs/development.md) for setup and editor integration.
+
 Use workspace-local caches when sandboxed:
 
 ```sh
 export CARGO_HOME="$PWD/.cargo-home"
 export UV_CACHE_DIR="$PWD/.uv-cache"
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
+cargo deny --locked --all-features check
 uv run --locked --project image-worker --group dev pytest image-worker/tests
+uv run --locked --project image-worker python -m unittest discover -s tests -v
 ```
 
-CI runs these checks on macOS and Windows. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.
+CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows, plus dependency policy checks on Linux. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes; CI must use these locks rather than resolving new versions. Review cargo-deny findings and document any narrow exceptions in deny.toml. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.
 
 See docs/CLI.md for a synthetic smoke test and docs/safety.md for scope limits.
