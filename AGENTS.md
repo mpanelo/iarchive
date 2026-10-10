@@ -1,6 +1,6 @@
 # iarchive development runbook
 
-The executable is `iarchive`. Read local planning instructions before changing scope.
+The executable is `iarchive`. Read local planning instructions before changing scope. Internal planning documents are local-only: do not track or publish them or copy their roadmap into public documentation.
 
 ## Safety invariants
 
@@ -25,6 +25,7 @@ Use this pattern consistently:
 - Start the subject with a capitalized imperative verb, such as `Add`, `Fix`, `Update`, `Document`, `Refactor`, or `Remove`.
 - Describe the resulting change concretely. Keep the subject at most 72 characters and omit a trailing period.
 - Use plain subjects without Conventional Commit prefixes, ticket numbers, or internal planning labels. Preserve the usual casing of names such as `iarchive`, `SQLite`, and `SHA-256`.
+- Do not include internal milestone identifiers or planning references in commit subjects or bodies. Describe concrete behavior and changes instead.
 - Keep each commit focused on one coherent change. Put related issues and tradeoffs in the body when they help explain the change.
 - Require a body for every nontrivial change. Omit it only for trivial changes, such as typo or formatting-only corrections. Explain what changed and why. Separate the body from the subject with a blank line and wrap prose at approximately 72 characters.
 - Do not include validation sections, test results, or test/environment blockers in commit messages. Report checks and blockers accurately in PR descriptions or task summaries instead.
