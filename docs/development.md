@@ -29,6 +29,8 @@ uv run --locked --project image-worker python -m unittest discover -s tests -v
 
 On PowerShell, set `$env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'` before running `cargo test`. The worker must be installed before the required Rust integration test runs.
 
+Windows users can run these checks and synthetic CLI tests through `scripts\windows\test.ps1` after running `scripts\windows\setup.ps1`. See [Windows setup and testing](windows-testing.md) for optional external-drive testing and retained results.
+
 Clippy's default lints are enforced as errors in CI. Add stricter lints individually when they catch a relevant risk, with narrowly scoped explanations for exceptions. Do not enable the entire `restriction` group, whose lints can conflict.
 
 `deny.toml` checks advisory, license, dependency-version, and source policies across the supported macOS and Windows targets. It rejects security and unsoundness advisories, unmaintained dependencies, yanked versions, wildcard requirements, and unknown sources. Multiple transitive versions are warnings: the current graph needs both major versions of `syn` and `winnow`. The existing `directories` dependency uses MPL-2.0-licensed `option-ext`, which has an explicit crate-specific license allowance. No advisories are ignored.

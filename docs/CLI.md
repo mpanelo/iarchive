@@ -64,6 +64,15 @@ Default state comes from `directories::ProjectDirs`: `%LOCALAPPDATA%\iarchive\da
 
 ## Windows 11 x64 / PowerShell
 
+For automated setup, quality checks, synthetic smoke tests, and optional external-drive tests, use the [Windows setup and test scripts](windows-testing.md):
+
+```powershell
+.\scripts\windows\setup.ps1
+.\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
+```
+
+Omit `-ExternalDrives` for local tests only. Setup can install missing system tools with `-InstallPrerequisites`. The external-drive tests generate fresh synthetic directories beside existing folders; they never scan your archive.
+
 Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI; real external-drive workflows still need separate runtime checks.
 
 ```powershell

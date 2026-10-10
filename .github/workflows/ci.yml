@@ -29,9 +29,34 @@ jobs:
         with:
           version: '0.12.3'
           python-version: '3.12'
-      - run: uv sync --locked --project image-worker --group dev
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --workspace --all-features --locked
-      - run: uv run --locked --project image-worker --group dev pytest image-worker/tests
-      - run: uv run --locked --project image-worker python -m unittest discover -s tests -v
+      - name: Set up Windows checkout
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/setup.ps1
+      - name: Run Windows checks and script smoke tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/test.ps1 -ExternalDrives 'C:'
+      - name: Check Windows PowerShell compatibility
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/windows/test.ps1 -SmokeOnly -ExternalDrives 'C:'
+      - if: runner.os != 'Windows'
+        run: uv sync --locked --project image-worker --group dev
+      - if: runner.os != 'Windows'
+        run: cargo fmt --all -- --check
+      - if: runner.os != 'Windows'
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - if: runner.os != 'Windows'
+        run: cargo test --workspace --all-features --locked
+      - if: runner.os != 'Windows'
+        run: uv run --locked --project image-worker --group dev pytest image-worker/tests
+      - if: runner.os != 'Windows'
+        run: uv run --locked --project image-worker python -m unittest discover -s tests -v
+      - name: Retain synthetic Windows reports
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: windows-script-reports
+          path: .smoke/windows-*/**/*.json*
+          include-hidden-files: true
