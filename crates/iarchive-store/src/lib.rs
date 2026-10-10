@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use iarchive_core::{FileFact, ImageFeatures, SCHEMA_VERSION};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -9,6 +9,11 @@ pub struct Store {
 }
 pub type ExactMember = (i64, String, String);
 pub type ExactGroup = Vec<ExactMember>;
+
+fn nonnegative_integer(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(column)?;
+    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(column, value))
+}
 
 #[derive(Debug, Serialize)]
 pub struct CycleStatus {
@@ -137,7 +142,7 @@ impl Store {
             visitor(serde_json::json!({
                 "schema_version":SCHEMA_VERSION,"record_type":"file","archive_id":cycle,
                 "file_id":row.get::<_,i64>(0)?,"relative_path":row.get::<_,String>(1)?,
-                "role":row.get::<_,String>(2)?,"byte_count":row.get::<_,u64>(3)?,
+                "role":row.get::<_,String>(2)?,"byte_count":nonnegative_integer(row,3)?,
                 "mtime_ns":row.get::<_,String>(4)?,"sha256":row.get::<_,Option<String>>(5)?,
                 "error":row.get::<_,Option<String>>(6)?,"warnings":serde_json::from_str::<serde_json::Value>(&row.get::<_,String>(7)?)?,
                 "present":row.get::<_,bool>(8)?,"cloud_asset_id":null,"pair_confidence":"unknown",
@@ -179,18 +184,18 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )?;
         let (count, bytes, hashes, errors, unsupported) = self.connection.query_row(
-            "SELECT COUNT(*),COALESCE(SUM(byte_count),0),COUNT(sha256),COALESCE(SUM(error IS NOT NULL),0),COALESCE(SUM(kind NOT IN ('image','sidecar')),0) FROM file_item WHERE cycle_id=?1 AND present=1", [cycle], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)))?;
+            "SELECT COUNT(*),COALESCE(SUM(byte_count),0),COUNT(sha256),COALESCE(SUM(error IS NOT NULL),0),COALESCE(SUM(kind NOT IN ('image','sidecar')),0) FROM file_item WHERE cycle_id=?1 AND present=1", [cycle], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?,nonnegative_integer(r,2)?,nonnegative_integer(r,3)?,nonnegative_integer(r,4)?)))?;
         let missing = self.connection.query_row(
             "SELECT COUNT(*) FROM file_item WHERE cycle_id=?1 AND present=0",
             [cycle],
-            |r| r.get(0),
+            |r| nonnegative_integer(r, 0),
         )?;
         let issues = self.connection.query_row(
             "SELECT COUNT(*) FROM scan_issue WHERE scan_id=?1",
             [scan],
-            |r| r.get(0),
+            |r| nonnegative_integer(r, 0),
         )?;
-        let (successes, failures) = self.connection.query_row("SELECT COUNT(a.features_json),COUNT(a.error) FROM analysis a JOIN file_item f ON f.id=a.file_id WHERE f.cycle_id=?1 AND f.present=1 AND a.sha256=f.sha256", [cycle], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        let (successes, failures) = self.connection.query_row("SELECT COUNT(a.features_json),COUNT(a.error) FROM analysis a JOIN file_item f ON f.id=a.file_id WHERE f.cycle_id=?1 AND f.present=1 AND a.sha256=f.sha256", [cycle], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?)))?;
         Ok(CycleStatus {
             cycle: cycle.to_owned(),
             source_root: root,
@@ -236,6 +241,8 @@ impl Store {
     }
 
     pub fn save_file(&mut self, cycle: &str, scan: i64, fact: &FileFact) -> Result<()> {
+        let byte_count = i64::try_from(fact.byte_count)
+            .context("file byte count exceeds SQLite integer range")?;
         let tx = self.connection.transaction()?;
         let old_hash: Option<Option<String>> = tx
             .query_row(
@@ -249,7 +256,7 @@ impl Store {
         }
         let kind = serde_json::to_value(&fact.kind)?;
         tx.execute("INSERT INTO file_item(cycle_id,relative_path,path_key,kind,byte_count,mtime_ns,sha256,error,warnings_json,seen_scan,present) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) ON CONFLICT(cycle_id,relative_path) DO UPDATE SET path_key=excluded.path_key,kind=excluded.kind,byte_count=excluded.byte_count,mtime_ns=excluded.mtime_ns,sha256=excluded.sha256,error=excluded.error,warnings_json=excluded.warnings_json,seen_scan=excluded.seen_scan,present=1",
-            params![cycle,fact.relative_path,fact.path_key,kind.as_str().unwrap(),fact.byte_count,fact.mtime_ns,fact.sha256,fact.error,serde_json::to_string(&fact.warnings)?,scan])?;
+            params![cycle,fact.relative_path,fact.path_key,kind.as_str().unwrap(),byte_count,fact.mtime_ns,fact.sha256,fact.error,serde_json::to_string(&fact.warnings)?,scan])?;
         tx.execute("DELETE FROM analysis WHERE file_id IN (SELECT id FROM file_item WHERE cycle_id=?1 AND relative_path=?2 AND (sha256 IS NULL OR sha256!=analysis.sha256))", params![cycle,fact.relative_path])?;
         tx.commit()?;
         Ok(())
@@ -375,6 +382,55 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_counts_reject_overflow_and_negative_database_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("db.sqlite")).unwrap();
+        store.import("test", dir.path()).unwrap();
+        let scan = store.begin_scan("test").unwrap();
+        let mut fact = FileFact {
+            relative_path: "synthetic.bin".into(),
+            path_key: "synthetic.bin".into(),
+            kind: iarchive_core::FileKind::Unknown,
+            byte_count: 0,
+            mtime_ns: "1".into(),
+            sha256: Some("a".repeat(64)),
+            error: None,
+            warnings: vec![],
+        };
+        for bytes in [0, i64::MAX as u64] {
+            fact.byte_count = bytes;
+            store.save_file("test", scan, &fact).unwrap();
+            assert_eq!(store.status("test").unwrap().bytes, bytes);
+            assert_eq!(
+                store
+                    .cached("test", &fact.relative_path)
+                    .unwrap()
+                    .unwrap()
+                    .byte_count,
+                bytes
+            );
+            let mut manifest = Vec::new();
+            store
+                .visit_manifest("test", &mut |record| {
+                    manifest.push(record);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(manifest[0]["byte_count"].as_u64(), Some(bytes));
+        }
+        fact.byte_count = i64::MAX as u64 + 1;
+        assert!(store.save_file("test", scan, &fact).is_err());
+        assert_eq!(store.status("test").unwrap().bytes, i64::MAX as u64);
+        store
+            .connection
+            .execute("UPDATE file_item SET byte_count=-1", [])
+            .unwrap();
+        assert!(store.status("test").is_err());
+        assert!(store.visit_manifest("test", &mut |_| Ok(())).is_err());
+    }
+
     #[test]
     fn migration_and_import_are_idempotent() {
         let dir = tempfile::tempdir().unwrap();

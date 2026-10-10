@@ -49,7 +49,7 @@ def generate(output, clean=False, heic=False):
             image.save(output / "scene.jpg", quality=90)
             exif = Image.Exif()
             exif[274] = 6
-            image.save(output / "rotated.heic", format="HEIF", exif=exif)
+            image.save(output / "rotated.heic", format="HEIF", exif=exif.tobytes())
     if not clean:
         (output / "corrupted.heic").write_bytes(b"intentionally invalid HEIC")
         (output / "unsupported.dng").write_bytes(b"synthetic unsupported RAW")

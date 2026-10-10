@@ -2,7 +2,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 from pillow_heif import register_heif_opener
 
 from iarchive_worker.__main__ import handle
@@ -43,14 +43,30 @@ def test_decode_preview_phash_and_original_preserved(tmp_path, extension, format
 
 
 @pytest.mark.parametrize("format,extension", [("JPEG", "jpg"), ("HEIF", "heic")])
-def test_exif_orientation(tmp_path, format, extension):
+@pytest.mark.parametrize("orientation", range(1, 9))
+def test_exif_orientation(tmp_path, format, extension, orientation):
     image = scene((160, 100))
     exif = Image.Exif()
-    exif[274] = 6
+    exif[274] = orientation
     path = tmp_path / f"rotated.{extension}"
-    image.save(path, format=format, exif=exif)
+    # HEIF needs serialized EXIF to encode the container's rotation property.
+    image.save(path, format=format, exif=exif.tobytes(), quality=95)
+    before = (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+    transformations = {
+        2: Image.Transpose.FLIP_LEFT_RIGHT,
+        3: Image.Transpose.ROTATE_180,
+        4: Image.Transpose.FLIP_TOP_BOTTOM,
+        5: Image.Transpose.TRANSPOSE,
+        6: Image.Transpose.ROTATE_270,
+        7: Image.Transpose.TRANSVERSE,
+        8: Image.Transpose.ROTATE_90,
+    }
+    expected = image.transpose(transformations[orientation]) if orientation != 1 else image
     corrected = decode(path)
-    assert corrected.size == (100, 160)
+    assert corrected.size == expected.size
+    difference = ImageStat.Stat(ImageChops.difference(corrected, expected)).mean
+    assert max(difference) < 12
+    assert (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns) == before
     corrected.close()
 
 
