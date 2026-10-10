@@ -104,6 +104,7 @@ pub fn validate_cycle(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Convert a native relative path to a portable, forward-slash manifest path.
 pub fn normalized_relative(path: &Path) -> Result<String> {
     ensure!(!path.as_os_str().is_empty(), "empty relative path");
     let mut parts = Vec::new();
@@ -224,11 +225,35 @@ mod tests {
             normalized_relative(Path::new("a space/旅行😀.JPG")).unwrap(),
             "a space/旅行😀.JPG"
         );
-        for s in ["../photo", "/photo", "a/../b", "D:\\secret", "a\\b"] {
-            assert!(normalized_relative(Path::new(s)).is_err());
+        for s in [
+            "",
+            "../photo",
+            "/photo",
+            "a/../b",
+            "D:\\secret",
+            "a:b",
+            "a\0b",
+        ] {
+            assert!(normalized_relative(Path::new(s)).is_err(), "{s:?}");
         }
+        #[cfg(windows)]
+        assert_eq!(normalized_relative(Path::new("a\\b")).unwrap(), "a/b");
+        #[cfg(not(windows))]
+        assert!(normalized_relative(Path::new("a\\b")).is_err());
         assert_eq!(classify(Path::new("x.HeIc")), FileKind::Image);
         assert_eq!(collision_key("E\u{301}.JPG"), collision_key("é.jpg"));
+    }
+    #[test]
+    fn manifest_inputs_require_normalized_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("a")).unwrap();
+        let file = root.join("a").join("b");
+        std::fs::write(&file, b"synthetic").unwrap();
+        assert_eq!(resolve_input(&root, "a/b").unwrap(), file);
+        for relative in ["a\\b", "a//b", "./a/b", "a/./b", "a/b/", "a/../a/b"] {
+            assert!(resolve_input(&root, relative).is_err(), "{relative:?}");
+        }
     }
     #[test]
     fn outputs_cannot_overlap_media() {
