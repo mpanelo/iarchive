@@ -2,6 +2,13 @@
 
 The executable is `iarchive`. Read local planning instructions before changing scope. Internal planning documents are local-only: do not track or publish them or copy their roadmap into public documentation.
 
+## Plan and permission
+
+- Before editing files or implementing changes, explain the proposed plan, affected files, and relevant tradeoffs to the user, then ask for permission to proceed.
+- Wait for explicit approval of that plan before making changes. Read-only inspection may be used to prepare the plan.
+- If the scope or approach materially changes, explain the revised plan and obtain approval again.
+- Obtain explicit permission before committing or pushing the current changes. Permission from an earlier task is not standing authorization for future tasks.
+
 ## Safety invariants
 
 - Inventory and image review are read-only on media. Never read private archives during development; use synthetic fixtures and temporary directories.
@@ -59,6 +66,6 @@ uv run --locked --project image-worker python -m unittest discover -s tests -v
 
 CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows, plus dependency policy checks on Linux. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes; CI must use these locks rather than resolving new versions. Review cargo-deny findings and document any narrow exceptions in deny.toml. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.
 
-Windows scripts use a dedicated checkout with project tools and temporary files in `.windows-sandbox`, process-only environment settings, and no automatic system installers. Use Windows Sandbox or a disposable VM when host isolation is required; a directory alone is not an OS sandbox. External-drive tests require explicit drive arguments and use only fresh synthetic runs beneath a marked `iarchive-sandbox` directory. See [Windows setup and testing](docs/windows-testing.md).
+Windows scripts use a dedicated checkout with project tools and temporary files in `.windows-sandbox`, process-only environment settings, and no automatic system installers. Directory scoping is not OS isolation. External-drive tests require explicit drive arguments and use only fresh synthetic runs beneath a marked `iarchive-sandbox` directory. See [Windows setup and testing](docs/windows-testing.md).
 
 See docs/CLI.md for a synthetic smoke test and docs/safety.md for scope limits.

@@ -1,14 +1,14 @@
 # Windows setup and testing
 
-Use Windows 11 x64 with 64-bit Windows PowerShell 5.1 or PowerShell 7.
-For isolation from your everyday Windows installation, use **Windows Sandbox or
-an expendable Windows VM**. A dedicated directory alone is not an OS sandbox:
+Use Windows 11 x64, including Windows Home, with 64-bit Windows PowerShell 5.1
+or PowerShell 7. The scripts use a dedicated checkout and keep project tools,
+caches, and temporary files under it. This is directory scoping, not OS isolation:
 compilers, dependency build scripts, and tests still run with your account's
 permissions.
 
-## Choose the environment and directory
+## Choose the directory
 
-Use this layout inside your chosen Windows environment:
+Use this dedicated layout:
 
 ```text
 C:\iarchive-sandbox\
@@ -25,7 +25,7 @@ If creating that parent directory requires elevation on your system, use
 paths from their own checkout location; they also work when called from another
 working directory. Keep the checkout outside photo archives and synced folders.
 
-For a host checkout with Git already installed:
+With Git already installed:
 
 ```powershell
 git clone https://github.com/mpanelo/iarchive.git C:\iarchive-sandbox\repo
@@ -34,73 +34,15 @@ Set-Location C:\iarchive-sandbox\repo
 .\scripts\windows\test.ps1
 ```
 
-### Windows Sandbox: stronger host isolation
-
-[Windows Sandbox](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/)
-is available on supported Windows Pro, Enterprise, and Education editions, not
-Home. Enabling this Windows feature is a separate administrator action and may
-require a restart; the project scripts do not enable it. On Home, use a disposable
-Windows VM instead.
-
-Once the feature is enabled, create a minimal, read-only source share. From the
-host checkout, export only committed source into a fresh directory (choose a new
-name when repeating this):
-
-```powershell
-New-Item -ItemType Directory -Path C:\iarchive-sandbox\source-share
-git archive --format=zip HEAD --output C:\iarchive-sandbox\source-share\repo.zip
-```
-
-Save this as `C:\iarchive-sandbox\iarchive.wsb`, then double-click it:
-
-```xml
-<Configuration>
-  <VGpu>Disable</VGpu>
-  <Networking>Enable</Networking>
-  <ClipboardRedirection>Disable</ClipboardRedirection>
-  <AudioInput>Disable</AudioInput>
-  <VideoInput>Disable</VideoInput>
-  <PrinterRedirection>Disable</PrinterRedirection>
-  <MappedFolders>
-    <MappedFolder>
-      <HostFolder>C:\iarchive-sandbox\source-share</HostFolder>
-      <SandboxFolder>C:\iarchive-source</SandboxFolder>
-      <ReadOnly>true</ReadOnly>
-    </MappedFolder>
-  </MappedFolders>
-</Configuration>
-```
-
-If you used a directory under your user profile, substitute its absolute host
-path in `HostFolder`. Only this small source share is mapped; do not map photo
-archives, your user profile, or whole drives. The read-only mapping prevents
-guest writes from persisting through that share. Networking is enabled to fetch
-tools and dependencies; this is not network isolation. See Microsoft's
-[configuration reference](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file).
-
-Inside Windows Sandbox, open PowerShell and create the writable guest checkout:
-
-```powershell
-Expand-Archive -LiteralPath C:\iarchive-source\repo.zip -DestinationPath C:\iarchive-sandbox\repo
-Set-Location C:\iarchive-sandbox\repo
-```
-
-Install the prerequisites **inside the guest**, then run `setup.ps1` and
-`test.ps1` there. Host-installed tools are not automatically available in the
-guest. Closing Windows Sandbox discards its installed software, checkout, and
-results; inspect reports before closing. This configuration exercises synthetic
-local files, not physical USB drives. For real drive tests, use the host workflow
-below or a VM with a dedicated test device attached.
-
 ## Setup and its write locations
 
-Install prerequisites in the environment you chose: rustup with its Cargo
+Install prerequisites if they are missing: rustup with its Cargo
 launcher, Visual Studio Build Tools with **Desktop development with C++** and a
 Windows SDK, and uv 0.12.3 or newer. See [Rust's MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html)
 and [uv installation](https://docs.astral.sh/uv/getting-started/installation/).
-Installing these prerequisites can change that environment's system; use the
-guest when you want to avoid installing them on your host. Open a new PowerShell
-after installation so the launchers are on PATH.
+Installing prerequisites can change Windows outside the checkout. Review their
+installation options separately; the setup script does not install them. Open a
+new PowerShell after installation so the launchers are on PATH.
 
 ```powershell
 .\scripts\windows\setup.ps1
@@ -118,8 +60,8 @@ previous process environment in `finally`. They reject local output directories
 whose ancestors are symlinks or reparse points. Existing global toolchains,
 Python installations, saved PATH, PowerShell profiles, and saved execution
 policies are not changed by the scripts. These are scoped tool settings, not a
-restriction on what arbitrary dependency code could do; use Windows Sandbox or
-a VM for that boundary.
+restriction on what arbitrary dependency code could do. The directory name
+`.windows-sandbox` identifies project storage, not a Windows security boundary.
 
 If Windows blocks script execution, run it with a process-local policy:
 
