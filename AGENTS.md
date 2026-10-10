@@ -12,6 +12,35 @@ The executable is `iarchive`. Read local planning instructions before changing s
 - Scan cache is an optimization, never evidence for a future deletion gate. Future verification must independently hash both drives.
 - Interrupted scans must retain per-file progress and invalidate completion; errors must not disappear behind successful counts.
 
+## Commit messages
+
+Use this pattern consistently:
+
+```text
+<Capitalized imperative verb> <specific change>
+
+<explanation of what changed and why>
+
+Validation: <checks performed and their results, including blocked checks>
+```
+
+- Start the subject with a capitalized imperative verb, such as `Add`, `Fix`, `Update`, `Document`, `Refactor`, or `Remove`.
+- Describe the resulting change concretely. Keep the subject at most 72 characters and omit a trailing period.
+- Use plain subjects without Conventional Commit prefixes, ticket numbers, or internal planning labels. Preserve the usual casing of names such as `iarchive`, `SQLite`, and `SHA-256`.
+- Keep each commit focused on one coherent change. Put related issues, tradeoffs, and validation in the body when they help explain the change.
+- Require a body for every nontrivial change. Omit it only for trivial changes, such as typo or formatting-only corrections. Explain what changed and why, and include validation results or blockers. Separate the body from the subject with a blank line and wrap prose at approximately 72 characters.
+- Report validation accurately. For documentation-only changes, a diff/format review is sufficient; do not imply that application tests ran. Describe dependency or environment blockers explicitly.
+- Rewrite existing commit messages only when explicitly requested. Preserve configured signing and hooks; report blockers rather than silently bypassing them.
+
+Subject examples (nontrivial changes also require a body):
+
+```text
+Add crash-safe replication to the secondary drive
+Fix stale analysis after source hashes change
+Document the replication workflow
+Document the commit message convention
+```
+
 ## Checks
 
 Use workspace-local caches when sandboxed:
