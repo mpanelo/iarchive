@@ -1,0 +1,21 @@
+[project]
+name = "iarchive-worker"
+version = "0.1.0"
+description = "Local, read-only image analysis worker for iarchive"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "Pillow>=12,<13",
+  "pillow-heif>=1,<2",
+  "ImageHash==4.3.2",
+  "numpy>=2,<3",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false

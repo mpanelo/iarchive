@@ -1,0 +1,10 @@
+/target/
+/.cargo-home/
+/.uv-cache/
+/.smoke/
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+/PLAN.md
+/CODEX_PROMPT.md

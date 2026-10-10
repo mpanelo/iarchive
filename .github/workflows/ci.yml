@@ -1,0 +1,41 @@
+name: checks
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      IARCHIVE_REQUIRE_WORKER_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.3'
+          python-version: '3.12'
+      # Bootstrap only: sandbox DNS prevented generating the initial locks locally.
+      # Commit the validated locks and remove this conditional step before release.
+      - name: Resolve initial dependency locks when absent
+        shell: bash
+        run: |
+          if [ ! -f Cargo.lock ]; then cargo generate-lockfile; fi
+          if [ ! -f image-worker/uv.lock ]; then uv lock --project image-worker; fi
+      - run: uv sync --locked --project image-worker --group dev
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: uv run --locked --project image-worker --group dev pytest image-worker/tests
+      - run: uv run --locked --project image-worker python -m unittest discover -s tests -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-locks-${{ matrix.os }}
+          path: |
+            Cargo.lock
+            image-worker/uv.lock
