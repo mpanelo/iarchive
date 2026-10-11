@@ -535,13 +535,13 @@ impl Store {
     /// Snapshot the live WAL database through SQLite's backup API, never by copying its main file.
     pub fn backup(&self, path: &Path) -> Result<()> {
         let file = std::fs::File::create_new(path)?;
-        drop(file);
         let mut destination = Connection::open(path)?;
         let backup = rusqlite::backup::Backup::new(&self.connection, &mut destination)?;
         backup.run_to_completion(64, std::time::Duration::from_millis(10), None)?;
         drop(backup);
         destination.close().map_err(|(_, error)| error)?;
-        std::fs::File::open(path)?.sync_all()?;
+        // Windows requires a writable handle to flush the completed backup.
+        file.sync_all()?;
         Ok(())
     }
 }

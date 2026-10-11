@@ -96,7 +96,8 @@ fn json(output: std::process::Output, code: i32) -> Value {
     assert_eq!(
         output.status.code(),
         Some(code),
-        "{}",
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
