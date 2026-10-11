@@ -71,7 +71,7 @@ impl HashTree {
 mod tests {
     use super::*;
     #[test]
-    fn homogeneous_hashes_have_bounded_candidates() {
+    fn candidate_count_is_bounded() {
         let mut tree = HashTree::default();
         for i in 0..10000 {
             tree.insert(0, i);

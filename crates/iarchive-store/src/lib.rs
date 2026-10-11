@@ -384,7 +384,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn byte_counts_reject_overflow_and_negative_database_values() {
+    fn byte_counts_are_checked() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("db.sqlite")).unwrap();
         store.import("test", dir.path()).unwrap();
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_scan_resumes_and_changed_hash_invalidates_features() {
+    fn scan_resume_and_hash_invalidation() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("db.sqlite");
         let mut store = Store::open(&path).unwrap();

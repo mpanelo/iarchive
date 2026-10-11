@@ -25,6 +25,7 @@ IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
 cargo deny --locked --all-features check
 uv run --locked --project image-worker --group dev pytest image-worker/tests
 uv run --locked --project image-worker python -m unittest discover -s tests -v
+uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 ```
 
 On PowerShell, set `$env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'` before running `cargo test`. The worker must be installed before the required Rust integration test runs.
@@ -35,7 +36,7 @@ Clippy's default lints are enforced as errors in CI. Add stricter lints individu
 
 `deny.toml` checks advisory, license, dependency-version, and source policies across the supported macOS and Windows targets. It rejects security and unsoundness advisories, unmaintained dependencies, yanked versions, wildcard requirements, and unknown sources. Multiple transitive versions are warnings: the current graph needs both major versions of `syn` and `winnow`. The existing `directories` dependency uses MPL-2.0-licensed `option-ext`, which has an explicit crate-specific license allowance. No advisories are ignored.
 
-The dependency check runs in a separate Linux CI job. Rust formatting, Clippy, Rust integration/unit tests, HEIC/Python tests, and SQLite schema tests run on macOS and Windows. Cargo.lock and image-worker/uv.lock are committed, and CI fails rather than replacing them with newly resolved dependencies.
+The dependency check runs in a separate Linux CI job. Rust formatting, Clippy, Rust integration/unit tests, HEIC/Python tests, SQLite schema tests, and the offline cloud probe run on macOS and Windows. The probe runs in its pinned provider environment so required adapter and MFA tests cannot silently skip. Cargo.lock, image-worker/uv.lock, and tools/cloud-probe/uv.lock are committed, and CI fails rather than replacing them with newly resolved dependencies.
 
 ## Updating dependencies
 

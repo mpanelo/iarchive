@@ -63,6 +63,9 @@ jobs:
         run: uv run --locked --project image-worker --group dev pytest image-worker/tests
       - if: runner.os != 'Windows'
         run: uv run --locked --project image-worker python -m unittest discover -s tests -v
+      - name: Test offline cloud probe with the pinned provider
+        if: runner.os != 'Windows'
+        run: uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
       - name: Retain synthetic Windows reports
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v7.0.2

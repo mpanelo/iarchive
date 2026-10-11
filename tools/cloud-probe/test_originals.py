@@ -72,7 +72,7 @@ class OriginalTests(unittest.TestCase):
     def plans(self):
         return select_originals(self.private, self.private, self.urls, "synthetic-account")
 
-    def test_selection_binds_full_namespace_ids_originals_and_opaque_checksums(self):
+    def test_selection_preserves_resource_bindings(self):
         plans = self.plans()
         self.assertEqual(len(plans), 2)
         first = plans[0]["binding"]
@@ -86,7 +86,7 @@ class OriginalTests(unittest.TestCase):
         self.assertEqual(first["provider_checksum_opaque"], "opaque-checksum")
         self.assertNotIn("SECRET", json.dumps(first))
 
-    def test_new_assets_changed_tags_resources_and_wrong_scope_block(self):
+    def test_baseline_drift_blocks_selection(self):
         variants = []
         for mutation in (lambda value: value.update(album_id="different-album"),
                          lambda value: value.update(zone_id={"zoneName": "wrong"}),
@@ -100,7 +100,7 @@ class OriginalTests(unittest.TestCase):
             with self.subTest(current=current), self.assertRaises(DownloadBlocked):
                 select_originals(self.private, current, self.urls, "synthetic-account")
 
-    def test_only_two_assets_and_unambiguous_resource_owners_are_accepted(self):
+    def test_selection_requires_unambiguous_owners(self):
         for mutation in (lambda value: value["passes"][-1]["assets"].pop(),
                          lambda value: value["passes"][-1]["masters"][0]["fields"].pop("resOriginalRes"),
                          lambda value: value["passes"][-1]["assets"][0]["fields"].update(
@@ -112,7 +112,7 @@ class OriginalTests(unittest.TestCase):
         with self.assertRaises(DownloadBlocked):
             select_originals(self.private, self.private, self.urls, None)
 
-    def test_missing_duplicate_unsafe_and_oversized_resources_block(self):
+    def test_invalid_resources_block_selection(self):
         for urls in ({}, {key: URLS[0] for key in self.urls},
                      {key: "https://evil.example/download" for key in self.urls}):
             with self.subTest(urls=urls), self.assertRaises(DownloadBlocked):
@@ -122,14 +122,14 @@ class OriginalTests(unittest.TestCase):
         with self.assertRaises(DownloadBlocked):
             select_originals(value, value, self.urls, "synthetic-account")
 
-    def test_media_url_requires_exact_trusted_https_shape(self):
+    def test_media_url_validation(self):
         self.assertTrue(valid_media_url(URLS[0]))
         for url in ("http://cvws.icloud-content.com/a", "https://icloud.com.evil.example/a",
                     "https://user:pass@cvws.icloud-content.com/a", "https://cvws.icloud-content.com:444/a",
                     URLS[0] + "#fragment", URLS[0] + "\n", "https://evil.example/a"):
             self.assertFalse(valid_media_url(url))
 
-    def test_guard_allows_exact_original_once_and_rejects_other_media_and_redirects(self):
+    def test_download_allowlist_is_single_use(self):
         calls = []
         class Adapter:
             def send(self, request, **kwargs):
@@ -159,7 +159,7 @@ class OriginalTests(unittest.TestCase):
                     Adapter().send(request, verify=True)
         self.assertEqual(calls, [URLS[0]])
 
-    def test_success_independently_reads_both_files_and_never_persists_urls(self):
+    def test_download_copies_are_independently_verified(self):
         requests = []
         def fetch(session, url, start):
             requests.append((url, start))
@@ -177,7 +177,7 @@ class OriginalTests(unittest.TestCase):
         for path in self.run.glob("*.json"):
             self.assertNotIn("SECRET_URL", path.read_text())
 
-    def test_truncated_oversized_error_documents_and_partial_ranges_block(self):
+    def test_download_response_validation(self):
         responses = [Response([b"short"]), Response([b"too-many-bytes"]),
                      Response(headers={"Content-Type": "application/json"}), Response(status=204),
                      Response(status=206, headers={"Content-Range": "bytes 1-6/7"})]
@@ -192,7 +192,7 @@ class OriginalTests(unittest.TestCase):
         self.assertEqual(stream_original(None, URLS[0], self.run / "range.bin", 7, lambda *args: good),
                          hashlib.sha256(b"fixture").hexdigest())
 
-    def test_interruption_retains_bytes_progress_and_invalidates_completion(self):
+    def test_interrupted_download_retains_progress(self):
         response = Response([b"fix", KeyboardInterrupt()])
         with self.assertRaises(KeyboardInterrupt):
             run_downloads(None, self.plans(), self.run, {}, save_new, lambda *args: response)
@@ -202,7 +202,7 @@ class OriginalTests(unittest.TestCase):
         self.assertFalse(progress["download_complete"])
         self.assertFalse((self.run / "download-manifest-private.json").exists())
 
-    def test_copy_corruption_blocks_success_despite_matching_size(self):
+    def test_copy_corruption_blocks_completion(self):
         original_hash = hash_file
         def tampered_hash(path):
             if path.parent.name == "copy-b":
@@ -212,7 +212,7 @@ class OriginalTests(unittest.TestCase):
             run_downloads(None, self.plans(), self.run, {}, save_new, lambda *args: Response())
         self.assertFalse((self.run / "download-manifest-private.json").exists())
 
-    def test_new_files_are_exclusive_and_links_are_rejected(self):
+    def test_download_file_guards(self):
         path = self.run / "existing.bin"
         path.write_bytes(b"existing")
         with self.assertRaises(FileExistsError):
@@ -225,7 +225,7 @@ class OriginalTests(unittest.TestCase):
         with self.assertRaises(DownloadBlocked):
             hash_file(self.run / "linked.bin")
 
-    def test_baseline_requires_completed_matching_two_asset_metadata(self):
+    def test_baseline_requires_completed_metadata(self):
         run = self.run / ".smoke/cloud-probe-synthetic"
         (run / "cookies").mkdir(parents=True)
         summary = {"schema": 1, "authenticated": True, "provider_version": PIN, "scope": "album",
@@ -238,7 +238,7 @@ class OriginalTests(unittest.TestCase):
         with self.assertRaises(ProbeBlocked):
             read_baseline(self.run, run.name)
 
-    def test_album_captures_original_urls_only_in_memory(self):
+    def test_original_urls_stay_in_memory(self):
         responses = [{"records": [album_record()]}] + pass_responses() + pass_responses()
         urls = {}
         private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,

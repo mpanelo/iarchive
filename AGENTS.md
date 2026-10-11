@@ -47,6 +47,14 @@ Document the replication workflow
 Document the commit message convention
 ```
 
+## Tests
+
+- Add tests for distinct behavior, meaningful edge cases, safety invariants, or regressions. Check existing coverage first; avoid tests for trivial edits or tests that merely mirror the implementation.
+- Extend an existing parameterized test when the new case exercises the same behavior. Keep overlapping unit and integration tests only when they protect different boundaries or system wiring.
+- Keep names concise, usually 3–6 words excluding `test_`; use module/class context and put scenario details in fixtures, assertions, or comments. Names must describe what the test actually proves.
+- Assert observable outcomes and isolate failure causes so an earlier guard cannot mask the intended check. Negative tests should distinguish the intended rejection from unrelated failures.
+- Test our dependency integration rather than third-party behavior alone. Run required tests with their dependencies in CI; do not silently skip them when those dependencies are absent.
+
 ## Checks
 
 Use rustfmt's standard Rust 2024 style and the Rust API Guidelines for public APIs. Run Clippy with warnings treated as errors; enable stricter lints selectively rather than enabling entire pedantic or restriction groups. See [development tooling](docs/development.md) for setup and editor integration.
@@ -62,6 +70,7 @@ IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
 cargo deny --locked --all-features check
 uv run --locked --project image-worker --group dev pytest image-worker/tests
 uv run --locked --project image-worker python -m unittest discover -s tests -v
+uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 ```
 
 CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows, plus dependency policy checks on Linux. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes; CI must use these locks rather than resolving new versions. Review cargo-deny findings and document any narrow exceptions in deny.toml. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.

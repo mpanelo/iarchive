@@ -18,7 +18,7 @@ fn value(output: std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 #[test]
-fn hashes_duplicates_cache_mutation_and_manifest() {
+fn inventory_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir_all(source.join("nested")).unwrap();
@@ -114,7 +114,7 @@ fn hashes_duplicates_cache_mutation_and_manifest() {
     );
 }
 #[test]
-fn partial_missing_and_disconnected_sources_never_complete() {
+fn incomplete_sources_block_index() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -146,7 +146,7 @@ fn partial_missing_and_disconnected_sources_never_complete() {
 }
 #[cfg(unix)]
 #[test]
-fn links_cannot_pull_external_bytes_into_inventory() {
+fn inventory_rejects_symlinks() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -213,7 +213,7 @@ fn junction_cannot_escape_root() {
     std::fs::remove_dir(junction).unwrap();
 }
 #[test]
-fn read_only_source_bytes_are_still_indexed() {
+fn readonly_sources_are_indexed() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir(&source).unwrap();

@@ -10,7 +10,7 @@ fn run(state: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 #[test]
-fn import_is_read_only_idempotent_and_cloud_unverified() {
+fn import_preserves_media_and_scope() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("photos 旅行😀");
     std::fs::create_dir(&source).unwrap();
@@ -46,7 +46,7 @@ fn import_is_read_only_idempotent_and_cloud_unverified() {
     assert_eq!(std::fs::read_dir(&source).unwrap().count(), 1);
 }
 #[test]
-fn no_state_inside_source_and_dry_run_does_not_write() {
+fn import_state_guards() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -85,7 +85,7 @@ fn no_state_inside_source_and_dry_run_does_not_write() {
     assert!(!state.exists());
 }
 #[test]
-fn dismounted_secondary_is_reported_without_creating_it() {
+fn doctor_reports_missing_secondary() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     std::fs::create_dir(&source).unwrap();
@@ -115,7 +115,7 @@ fn destructive_commands_are_unavailable() {
 
 #[cfg(unix)]
 #[test]
-fn generated_state_artifacts_cannot_link_to_media() {
+fn state_rejects_media_links() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source");
     let state = dir.path().join("state");

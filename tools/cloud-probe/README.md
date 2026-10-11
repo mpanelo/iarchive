@@ -219,11 +219,13 @@ paths and filesystem protections still require Windows runtime verification.
 
 ## Offline checks
 
-These tests use fake responses and forbid socket creation. They require no cloud
-package installation or account access:
+These tests use fake responses and forbid socket creation. Run them in the pinned
+provider environment so the adapter and MFA checks exercise the upstream package.
+They require no account access:
 
 ```sh
-python3 -m unittest discover -s tools/cloud-probe -v
+uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 ```
 
-They also run through the repository's existing Python unittest check.
+CI and the Windows test script run this command separately from the image-worker
+tests. Missing provider dependencies fail the checks rather than skipping them.

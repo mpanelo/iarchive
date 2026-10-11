@@ -1,44 +1,60 @@
 """Exercise the pinned provider's download request with synthetic responses."""
 
+import io
 from pathlib import Path
 import socket
 import tempfile
-from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from originals import stream_original
-from test_originals import Response, URLS
+from originals import run_downloads, select_originals
+from probe import request_guard, save_new
+from test_originals import inventory
 
 
 class ProviderDownloadTests(unittest.TestCase):
     def setUp(self):
-        try:
-            from pyicloud_ipd.services.photos import download_asset
-            from requests import Request
-        except ImportError:
-            self.skipTest("Optional provider integration: run in tools/cloud-probe environment")
-        self.download_asset, self.Request = download_asset, Request
         guard = patch.object(socket, "socket", side_effect=AssertionError("Network forbidden"))
         guard.start()
         self.addCleanup(guard.stop)
 
-    def test_actual_provider_requests_full_stream_and_closes_response(self):
-        calls, response = [], Response()
-        def get(url, **kwargs):
-            calls.append((url, kwargs))
-            return response
-        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
-            stream_original(SimpleNamespace(get=get), URLS[0], Path(directory) / "original.bin", 7)
-        self.assertEqual(calls, [(URLS[0], {"headers": {"Range": "bytes=0-"}, "stream": True})])
-        self.assertTrue(response.closed)
+    def test_prepared_download_matches_allowlist(self):
+        from requests import Response, Session
+        from requests.adapters import HTTPAdapter
 
-    def test_requests_preparation_normalizes_signed_url_without_network(self):
-        value = "https://cvws.icloud-content.com/synthetic%2fpath?token=fixture%7evalue"
-        prepared = self.Request("GET", value).prepare()
-        self.assertEqual(prepared.method, "GET")
-        self.assertIsNone(prepared.body)
-        self.assertEqual(prepared.url, "https://cvws.icloud-content.com/synthetic%2Fpath?token=fixture~value")
+        private, urls = inventory()
+        urls[("CPLMaster", "full-master-1")] = (
+            "https://cvws.icloud-content.com/synthetic%2fpath?token=fixture%7evalue")
+        plans = select_originals(private, private, urls, "synthetic-account")
+        calls, responses = [], []
+
+        def send(adapter, request, **kwargs):
+            calls.append(request.url)
+            self.assertEqual(request.method, "GET")
+            self.assertIsNone(request.body)
+            self.assertEqual(request.headers["Range"], "bytes=0-")
+            self.assertTrue(kwargs["stream"])
+            response = Response()
+            response.status_code = 200
+            response.headers["Content-Type"] = "application/octet-stream"
+            response.raw = io.BytesIO(b"fixture")
+            response.request, response.url = request, request.url
+            response.close = Mock(wraps=response.close)
+            responses.append(response)
+            return response
+
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory, \
+                Session() as session, patch.object(HTTPAdapter, "send", send), \
+                request_guard(True, True, True) as transport:
+            run_downloads(session, plans, Path(directory), transport, save_new)
+            self.assertEqual(transport["original_download_requests"], 2)
+            self.assertEqual(transport["approved_download_urls"], set())
+        self.assertEqual(calls, [
+            "https://cvws.icloud-content.com/synthetic%2Fpath?token=fixture~value",
+            urls[("CPLMaster", "full-master-2")],
+        ])
+        for response in responses:
+            response.close.assert_called_once()
 
 
 if __name__ == "__main__":

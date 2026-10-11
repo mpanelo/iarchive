@@ -13,7 +13,7 @@ fn run(state: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 #[test]
-fn worker_end_to_end_candidates_caching_and_unchanged_media() {
+fn audit_round_trip() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()

@@ -67,30 +67,58 @@ class ResourceTests(unittest.TestCase):
         self.addCleanup(guard.stop)
         self.records, self.expectations = variant_records()
 
-    def test_all_variants_keep_owners_types_and_opaque_checksums_without_deduplication(self):
-        value = observation(self.records)
-        before = copy.deepcopy(value)
-        report = build_resource_report(value, self.expectations)
-        self.assertEqual(value, before)
-        self.assertEqual(len(report["resources"]), 12)
-        self.assertEqual(report["summary"]["resource_role_counts"], {
-            "original": 4, "original_video_companion": 1, "alternate_original": 1,
-            "full_image": 1, "full_video": 1, "sidecar": 1,
-            "preview_image": 2, "preview_video": 1,
-        })
-        self.assertEqual(report["summary"]["expectation_status"], "MATCHED OBSERVED FIELDS")
-        raw = next(asset for asset in report["assets"] if asset["asset_id"] == "full-asset-raw")
-        resources = [report["resources"][index] for index in raw["resource_indices"]]
-        self.assertEqual({item["file_type"] for item in resources}, {"com.adobe.raw-image", "public.jpeg"})
-        self.assertTrue(all(item["provider_checksum_opaque"] == "opaque-synthetic-checksum"
-                            for item in report["resources"]))
-        self.assertTrue(all(item["record_change_tag"] for item in report["resources"]))
-        self.assertTrue(all(asset["pair_confidence"] == "unknown" for asset in report["assets"]))
-        for key in ("complete_resource_inventory", "content_mapping", "provider_checksum_algorithm"):
-            self.assertEqual(report["summary"][key], "NOT VERIFIED")
-        self.assertNotIn("SECRET", json.dumps(report))
+    def test_resource_variants_remain_distinct(self):
+        for original_type, alternate_type in (("com.adobe.raw-image", "public.jpeg"),
+                                               ("public.jpeg", "com.adobe.raw-image")):
+            with self.subTest(original_type=original_type):
+                records = copy.deepcopy(self.records)
+                for identity, field, file_type in (
+                        ("full-master-raw", "resOriginalFileType", original_type),
+                        ("full-asset-raw", "resOriginalAltFileType", alternate_type)):
+                    next(record for record in records if record["recordName"] == identity)["fields"][
+                        field] = {"value": file_type}
+                expected = {
+                    (record["recordType"], record["recordName"], field): (
+                        record["recordChangeTag"],
+                        record["fields"][field.removesuffix("Res") + "FileType"]["value"],
+                        resource["value"]["size"], resource["value"]["fileChecksum"])
+                    for record in records for field, resource in record["fields"].items()
+                    if field.endswith("Res")
+                }
+                value = observation(records)
+                before = copy.deepcopy(value)
+                report = build_resource_report(value, self.expectations)
+                actual = {
+                    (item["record_type"], item["record_id"], item["resource_field"]): (
+                        item["record_change_tag"], item["file_type"], item["size"],
+                        item["provider_checksum_opaque"])
+                    for item in report["resources"]
+                }
+                self.assertEqual(actual, expected)
+                references = {record["recordName"]: record["fields"]["masterRef"]["value"]["recordName"]
+                              for record in records if record["recordType"] == "CPLAsset"}
+                self.assertEqual({asset["asset_id"] for asset in report["assets"]}, set(references))
+                for asset in report["assets"]:
+                    linked = {key for key in expected
+                              if key[1] in (asset["asset_id"], references[asset["asset_id"]])}
+                    observed = {tuple(report["resources"][index][key]
+                                      for key in ("record_type", "record_id", "resource_field"))
+                                for index in asset["resource_indices"]}
+                    self.assertEqual(observed, linked)
+                self.assertEqual(value, before)
+                self.assertEqual(len(report["resources"]), 12)
+                self.assertEqual(report["summary"]["resource_role_counts"], {
+                    "original": 4, "original_video_companion": 1, "alternate_original": 1,
+                    "full_image": 1, "full_video": 1, "sidecar": 1,
+                    "preview_image": 2, "preview_video": 1,
+                })
+                self.assertEqual(report["summary"]["expectation_status"], "MATCHED OBSERVED FIELDS")
+                self.assertTrue(all(asset["pair_confidence"] == "unknown" for asset in report["assets"]))
+                for key in ("complete_resource_inventory", "content_mapping", "provider_checksum_algorithm"):
+                    self.assertEqual(report["summary"][key], "NOT VERIFIED")
+                self.assertNotIn("SECRET", json.dumps(report))
 
-    def test_missing_motion_raw_companion_render_and_sidecar_are_explicit_findings(self):
+    def test_missing_variants_are_reported(self):
         for owner_id, field in (("full-master-live", "resOriginalVidComplRes"),
                                 ("full-asset-raw", "resOriginalAltRes"),
                                 ("full-asset-edited", "resJPEGFullRes"),
@@ -103,24 +131,13 @@ class ResourceTests(unittest.TestCase):
                 self.assertEqual([item["resource_field"] for item in missing], [field])
                 self.assertEqual(report["summary"]["expectation_status"], "FINDINGS")
 
-    def test_previews_cannot_replace_a_missing_original(self):
+    def test_previews_cannot_replace_originals(self):
         self.records[1]["fields"].pop("resOriginalRes")
         report = build_resource_report(observation(self.records))
         self.assertIn("missing_original_resource", report["summary"]["resource_finding_counts"])
         self.assertEqual(report["summary"]["expectation_status"], "NOT PROVIDED")
 
-    def test_raw_and_jpeg_types_can_be_reversed_without_inventing_pair_confidence(self):
-        next(record for record in self.records if record["recordName"] == "full-master-raw")["fields"][
-            "resOriginalFileType"] = {"value": "public.jpeg"}
-        next(record for record in self.records if record["recordName"] == "full-asset-raw")["fields"][
-            "resOriginalAltFileType"] = {"value": "com.adobe.raw-image"}
-        report = build_resource_report(observation(self.records), self.expectations)
-        asset = next(item for item in report["assets"] if item["asset_id"] == "full-asset-raw")
-        self.assertEqual(asset["pair_confidence"], "unknown")
-        self.assertEqual({report["resources"][index]["file_type"] for index in asset["resource_indices"]},
-                         {"public.jpeg", "com.adobe.raw-image"})
-
-    def test_type_or_dimensions_without_companion_resource_are_findings(self):
+    def test_orphan_resource_metadata_is_reported(self):
         self.records[1]["fields"].pop("resOriginalVidComplRes")
         self.records[1]["fields"]["resOriginalVidComplWidth"] = {"value": 1920}
         report = build_resource_report(observation(self.records))
@@ -129,7 +146,7 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(missing[0]["resource_field"], "resOriginalVidComplRes")
         self.assertEqual(report["summary"]["observed_resources"], 11)
 
-    def test_same_field_on_asset_and_master_is_retained_and_ambiguous(self):
+    def test_ambiguous_owners_preserve_resources(self):
         add_resource(self.records[0], "resOriginal", "public.heic")
         report = build_resource_report(observation(self.records), self.expectations)
         originals = [item for item in report["resources"] if item["resource_field"] == "resOriginalRes"
@@ -138,7 +155,7 @@ class ResourceTests(unittest.TestCase):
         self.assertIn("ambiguous_resource_ownership", report["summary"]["resource_finding_counts"])
         self.assertEqual(report["summary"]["expectation_status"], "FINDINGS")
 
-    def test_shared_and_unreferenced_masters_are_findings_without_losing_resources(self):
+    def test_master_relationship_findings(self):
         value = observation(self.records)
         value["assets"][1]["fields"]["masterRef"]["recordName"] = "full-master-live"
         report = build_resource_report(value)
@@ -148,14 +165,14 @@ class ResourceTests(unittest.TestCase):
         shared = next(item for item in report["resources"] if item["record_id"] == "full-master-live")
         self.assertEqual(shared["asset_ids"], ["full-asset-live", "full-asset-video"])
 
-    def test_missing_master_is_not_inferred_from_filename_or_checksum(self):
+    def test_missing_master_is_not_inferred(self):
         value = observation(self.records)
         value["assets"][0]["fields"]["masterRef"] = {"recordName": "missing-master"}
         report = build_resource_report(value)
         self.assertIn("missing_master_reference", report["summary"]["resource_finding_counts"])
         self.assertEqual(len(report["resources"]), 12)
 
-    def test_unrequested_resource_is_preserved_with_unknown_role_and_no_secrets(self):
+    def test_unknown_variants_are_preserved(self):
         add_resource(self.records[0], "resFutureVariant", "com.vendor.unknown")
         report = build_resource_report(observation(self.records), self.expectations)
         unknown = next(item for item in report["resources"] if item["resource_field"] == "resFutureVariantRes")
@@ -165,7 +182,7 @@ class ResourceTests(unittest.TestCase):
         self.assertIn("unexpected_resource", report["summary"]["resource_finding_counts"])
         self.assertNotIn("SECRET", json.dumps(report))
 
-    def test_zero_size_missing_url_and_missing_type_remain_inventory_entries(self):
+    def test_incomplete_resources_are_preserved(self):
         add_resource(self.records[0], "resSidecar", "public.xml", size=0)
         value = self.records[0]["fields"]
         value["resSidecarRes"]["value"].pop("downloadURL")
@@ -175,8 +192,12 @@ class ResourceTests(unittest.TestCase):
         counts = report["summary"]["resource_finding_counts"]
         self.assertTrue({"empty_resource", "resource_url_unavailable", "missing_file_type"} <= set(counts))
 
-    def test_expectations_require_full_known_ids_and_unique_valid_field_names(self):
+    def test_expectation_scope_and_shape(self):
         value = observation(self.records)
+        report = build_resource_report(value, {"full-asset-live": self.expectations["full-asset-live"]})
+        self.assertEqual(report["summary"]["expectation_asset_count"], 1)
+        self.assertEqual(report["summary"]["expectation_status"], "MATCHED OBSERVED FIELDS")
+        self.assertEqual(report["summary"]["complete_resource_inventory"], "NOT VERIFIED")
         for expectations in ([], {"full-asset": ["resOriginalRes"]},
                              {"full-asset-live": []}, {"full-asset-live": "resOriginalRes"},
                              {"full-asset-live": ["resOriginalRes", "resOriginalRes"]},
@@ -184,7 +205,7 @@ class ResourceTests(unittest.TestCase):
             with self.subTest(expectations=expectations), self.assertRaises(ResourceReportBlocked):
                 build_resource_report(value, expectations)
 
-    def test_duplicate_record_ids_and_missing_tags_block_reporting(self):
+    def test_invalid_record_identity_blocks_reporting(self):
         for mutation in (lambda value: value["masters"].append(value["masters"][0]),
                          lambda value: value["assets"][0].pop("recordChangeTag")):
             value = observation(self.records)
@@ -192,13 +213,7 @@ class ResourceTests(unittest.TestCase):
             with self.assertRaises(ResourceReportBlocked):
                 build_resource_report(value)
 
-    def test_matching_expectations_for_one_asset_do_not_cover_the_other_assets(self):
-        report = build_resource_report(observation(self.records), {
-            "full-asset-live": self.expectations["full-asset-live"]})
-        self.assertEqual(report["summary"]["expectation_asset_count"], 1)
-        self.assertEqual(report["summary"]["complete_resource_inventory"], "NOT VERIFIED")
-
-    def test_unknown_resource_drift_is_compared_and_only_counts_enter_summary(self):
+    def test_unknown_drift_summary_hides_details(self):
         first, second = fixtures.pass_responses(), fixtures.pass_responses()
         add_resource(second[1]["records"][0], "resFutureVariant", "com.vendor.unknown")
         responses = [{"records": [fixtures.album_record()]}] + first + second
@@ -212,12 +227,12 @@ class ResourceTests(unittest.TestCase):
         for secret in ("full-asset", "full-master", "resFutureVariant", "opaque-synthetic-checksum", "SECRET"):
             self.assertNotIn(secret, encoded)
 
-    def test_retaining_unsolicited_fields_does_not_expand_the_query_allowlist(self):
+    def test_query_allowlist_stays_fixed(self):
         body = list_body(fixtures.ZONE, fixtures.ALBUM, 0)
         body["desiredKeys"].append("resFutureVariantRes")
         self.assertIsNone(query_kind(body, fixtures.ZONE, fixtures.ALBUM))
 
-    def test_malformed_unrequested_resources_stop_sanitization(self):
+    def test_malformed_unknown_resources_are_rejected(self):
         for field, value in (("resFutureRes", {"value": {"size": 7}}),
                              ("res../escapeRes", {"value": resource("public.jpeg")["Res"]["value"]})):
             record = fixtures.pair()[0]
@@ -225,7 +240,7 @@ class ResourceTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(AlbumBlocked):
                 safe_record(record)
 
-    def test_album_entry_point_writes_private_report_without_downloads_or_public_ids(self):
+    def test_album_report_round_trip(self):
         one_pass = [fixtures.count_response(4), {"records": self.records},
                     {"records": []}, fixtures.count_response(4)]
         responses = [{"records": [fixtures.album_record()]}] + copy.deepcopy(one_pass) + copy.deepcopy(one_pass)

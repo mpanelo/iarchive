@@ -12,11 +12,6 @@ from probe import verify_second_factor
 
 class MfaTests(unittest.TestCase):
     def setUp(self):
-        try:
-            from icloudpd import authentication
-        except ImportError:
-            self.skipTest("Optional provider integration: run in tools/cloud-probe environment")
-        self.authentication = authentication
         guard = patch.object(socket, "socket", side_effect=AssertionError("Network forbidden"))
         guard.start()
         self.addCleanup(guard.stop)
@@ -53,7 +48,7 @@ class MfaTests(unittest.TestCase):
         self.assertEqual(self.calls, ["phones", "push", ("validate_push", "123456")])
         self.assertNotIn("123456", output.getvalue())
 
-    def test_sms_choice_requests_delivery_before_validation(self):
+    def test_sms_delivery_precedes_validation(self):
         output = io.StringIO()
         with patch("probe.getpass.getpass", side_effect=["a", "654321"]), redirect_stdout(output):
             verify_second_factor(self.service)

@@ -36,7 +36,7 @@ class PolicyTests(unittest.TestCase):
         self.fixture.snapshot = replace(self.fixture.snapshot, active=tuple(self.fixture.assets))
         self.fixture.provider = MockCloud(self.fixture.snapshot)
 
-    def test_exact_variants_and_duplicate_names_survive_simulation(self):
+    def test_simulation_preserves_media_variants(self):
         before = {str(p): hash_file(p) for root in self.fixture.roots for p in root.rglob("*") if p.is_file()}
         plan = self.fixture.plan()
         self.assertEqual(len(plan.data()["manifest"]), 9)
@@ -49,7 +49,7 @@ class PolicyTests(unittest.TestCase):
         after = {str(p): hash_file(p) for root in self.fixture.roots for p in root.rglob("*") if p.is_file()}
         self.assertEqual(before, after)
 
-    def test_only_explicit_allowlist_is_simulated_and_resume_is_idempotent(self):
+    def test_allowlist_resume_is_idempotent(self):
         key = self.fixture.assets[1].id
         plan = self.fixture.plan((key,))
         self.run_plan(plan)
@@ -68,13 +68,13 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             self.fixture.plan()
 
-    def test_abbreviations_names_dates_and_empty_selection_are_not_identity(self):
+    def test_selection_requires_full_ids(self):
         for selected in (("asset-f",), ("IMG_0001.original",), ("2001-01-01",), (),
                          (self.fixture.assets[0].id, self.fixture.assets[0].id)):
             with self.subTest(selected=selected), self.assertRaises(Blocked):
                 self.fixture.plan(selected)
 
-    def test_unknown_or_unproven_resource_evidence_blocks_plan(self):
+    def test_unproven_resources_block_plan(self):
         asset = self.fixture.assets[0]
         changes = (replace(asset, complete=False), replace(asset, relationships_proven=False),
                    replace(asset, master_id=""), replace(asset, master_tag=""),
@@ -89,7 +89,7 @@ class PolicyTests(unittest.TestCase):
                 self.fixture.plan()
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_missing_live_motion_and_raw_companion_block_plan(self):
+    def test_missing_variants_block_plan(self):
         for index, role in ((1, "live_motion"), (2, "jpeg_companion")):
             original = self.fixture.assets[index]
             changed = replace(original, resources=tuple(r for r in original.resources if r.role != role))
@@ -99,7 +99,7 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(role=role), self.assertRaises(Blocked):
                 self.fixture.plan()
 
-    def test_full_master_and_resource_version_bindings_are_required(self):
+    def test_resource_bindings_must_match(self):
         original = self.fixture.bindings[0]
         for change in (replace(original, master_id="different-master"),
                        replace(original, version="stale-version"),
@@ -108,7 +108,7 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(binding=change), self.assertRaises(Blocked):
                 self.fixture.plan()
 
-    def test_duplicate_or_missing_bindings_are_rejected(self):
+    def test_binding_uniqueness_and_completeness(self):
         original = list(self.fixture.bindings)
         for values in (original[1:], original + [original[0]],
                        [replace(original[1], first=original[0].first), *original[1:]]):
@@ -116,7 +116,7 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(Blocked):
                 self.fixture.plan()
 
-    def test_same_name_size_and_mtime_with_different_bytes_blocks_execution(self):
+    def test_byte_changes_block_execution(self):
         plan = self.fixture.plan()
         path = self.fixture.roots[1] / self.fixture.bindings[0].second
         original = path.stat()
@@ -126,7 +126,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_hash_accepts_stable_handle_timestamps_that_differ_from_path(self):
+    def test_hash_accepts_stable_handle_timestamps(self):
         path = self.fixture.roots[0] / self.fixture.bindings[0].first
         expected = hash_file(path)
         original = os.fstat
@@ -142,7 +142,7 @@ class PolicyTests(unittest.TestCase):
         with patch("prototype.os.fstat", side_effect=handle_stat):
             self.assertEqual(hash_file(path), expected)
 
-    def test_hash_rejects_handle_changes_and_replaced_paths(self):
+    def test_hash_rejects_changes_and_replacements(self):
         path = self.fixture.roots[0] / self.fixture.bindings[0].first
         original = os.fstat
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
@@ -191,14 +191,14 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaises(Blocked):
                 self.fixture.plan()
 
-    def test_traversal_and_windows_absolute_paths_are_rejected(self):
+    def test_unsafe_paths_are_rejected(self):
         original = self.fixture.bindings[0]
         for name in ("../outside", "/outside", "C:/outside", "folder\\outside", "a/./b", "a//b"):
             self.fixture.bindings[0] = replace(original, first=name)
             with self.subTest(path=name), self.assertRaises(Blocked):
                 self.fixture.plan()
 
-    def test_symlink_to_generated_file_is_rejected(self):
+    def test_symlinks_are_rejected(self):
         target = self.fixture.directory / "outside-synthetic"
         target.write_text("fixture only")
         path = self.fixture.roots[0] / "link"
@@ -209,7 +209,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             self.fixture.plan()
 
-    def test_windows_reparse_attribute_is_rejected(self):
+    def test_reparse_points_are_rejected(self):
         from prototype import safe_path
 
         original = Path.lstat
@@ -234,7 +234,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             self.fixture.plan()
 
-    def test_sealed_plan_round_trips_and_rejects_edited_payload(self):
+    def test_plan_seal_round_trip(self):
         plan = self.fixture.plan()
         path = self.fixture.state / "plan.json"
         plan.save(path)
@@ -252,7 +252,7 @@ class PolicyTests(unittest.TestCase):
                 execute_simulation(plan, self.fixture.provider, approval)
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_wrong_account_database_zone_and_owner_stop_before_calls(self):
+    def test_wrong_scope_blocks_execution(self):
         plan = self.fixture.plan()
         for field in ("account", "database", "zone", "owner"):
             self.fixture.provider.scope = replace(self.fixture.scope, **{field: "wrong"})
@@ -267,17 +267,17 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_new_old_capture_upload_cannot_enter_approved_plan(self):
+    def test_new_upload_blocks_execution(self):
         plan = self.fixture.plan()
         new = replace(self.fixture.assets[0], id="newly-uploaded-full-id", captured_at="1990-01-01")
         self.fixture.provider.active[new.id] = new
-        self.fixture.provider.generation += 1
+        # An unchanged generation must not conceal an added asset.
         with self.assertRaises(Blocked):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
         self.assertIn(new.id, self.fixture.provider.active)
 
-    def test_missing_paginated_asset_blocks_execution(self):
+    def test_missing_asset_blocks_execution(self):
         plan = self.fixture.plan()
         self.fixture.provider.active.pop(self.fixture.assets[1].id)
         # Even a lying complete flag and unchanged generation cannot hide drift.
@@ -285,7 +285,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_master_tag_or_resource_change_blocks_execution(self):
+    def test_resource_drift_blocks_execution(self):
         plan = self.fixture.plan()
         key = self.fixture.assets[0].id
         original = self.fixture.assets[0]
@@ -297,13 +297,13 @@ class PolicyTests(unittest.TestCase):
                 self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
 
-    def test_generation_drift_even_if_inventory_returns_to_same_contents(self):
+    def test_generation_drift_blocks_execution(self):
         plan = self.fixture.plan()
         self.fixture.provider.generation += 2
         with self.assertRaises(Blocked):
             self.run_plan(plan)
 
-    def test_race_between_inventory_and_operation_is_conditionally_rejected(self):
+    def test_conditional_operation_rejects_race(self):
         plan = self.fixture.plan()
         provider = self.fixture.provider
         original = provider.simulate_move
@@ -317,7 +317,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(provider.calls, [])
 
-    def test_partial_success_and_per_record_error_are_audited(self):
+    def test_partial_success_is_audited(self):
         plan = self.fixture.plan()
         first, second, third = [a.id for a in self.fixture.assets]
         self.fixture.provider.faults[second] = "record_error"
@@ -331,7 +331,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [first, second])
 
-    def test_timeout_after_application_reconciles_without_retrying_asset(self):
+    def test_applied_timeout_reconciles_without_retry(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "timeout_after"
@@ -346,7 +346,7 @@ class PolicyTests(unittest.TestCase):
         plan.save(path)
         return path
 
-    def test_timeout_before_application_remains_unknown_without_blind_retry(self):
+    def test_unapplied_timeout_blocks_retry(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "timeout_before"
@@ -356,7 +356,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.fixture.provider.calls, [first])
         self.assertEqual(len(self.fixture.provider.active), 3)
 
-    def test_interruption_after_application_preserves_intent_for_resume(self):
+    def test_interruption_preserves_resume_intent(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "interrupt_after"
@@ -366,7 +366,7 @@ class PolicyTests(unittest.TestCase):
         self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls.count(first), 1)
 
-    def test_bad_response_requires_reconciliation_of_exact_record(self):
+    def test_bad_response_requires_reconciliation(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "wrong_response"
@@ -375,7 +375,7 @@ class PolicyTests(unittest.TestCase):
         self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls.count(first), 1)
 
-    def test_success_response_without_postcondition_is_not_success(self):
+    def test_success_requires_verified_postcondition(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "success_without_change"
@@ -384,7 +384,7 @@ class PolicyTests(unittest.TestCase):
                 self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [first])
 
-    def test_recently_deleted_record_changes_block_reconciliation(self):
+    def test_deleted_record_drift_blocks_reconciliation(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "timeout_after"
@@ -396,7 +396,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [first])
 
-    def test_changed_replicas_block_resume_after_partial_success(self):
+    def test_changed_replicas_block_resume(self):
         plan = self.fixture.plan()
         first = self.fixture.assets[0].id
         self.fixture.provider.faults[first] = "timeout_after"
@@ -407,7 +407,7 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [first])
 
-    def test_invalid_or_other_plan_audit_blocks_resume(self):
+    def test_invalid_audit_blocks_resume(self):
         plan = self.fixture.plan()
         path = self.fixture.state / "audit.jsonl"
         for content in ('{"interrupted":', canonical({"plan_sha256": "wrong", "id": self.fixture.assets[0].id}),
@@ -425,7 +425,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             execute_simulation(plan, OtherProvider(), approval_phrase(plan))
 
-    def test_review_bundles_identical_and_outside_media(self):
+    def test_review_bundle_round_trip(self):
         plan = self.fixture.plan()
         self.run_plan(plan)
         first, second = self.fixture.export_review(plan)
@@ -435,7 +435,7 @@ class PolicyTests(unittest.TestCase):
             self.assertNotIn(root, first.parents)
             self.assertNotIn(root, second.parents)
 
-    def test_demo_requires_exact_confirmation_and_leaves_review_bundles(self):
+    def test_demo_confirmation_round_trip(self):
         script = Path(__file__).parent / "demo.py"
         env = {**os.environ, "TMPDIR": str(self.fixture.directory),
                "TMP": str(self.fixture.directory), "TEMP": str(self.fixture.directory)}

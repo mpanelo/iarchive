@@ -2,7 +2,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops, ImageDraw, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageStat, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 
 from iarchive_worker.__main__ import handle
@@ -26,7 +26,7 @@ def scene(size=(160, 100)):
 
 
 @pytest.mark.parametrize("extension,format", [("JPEG", "JPEG"), ("png", "PNG"), ("heic", "HEIF")])
-def test_decode_preview_phash_and_original_preserved(tmp_path, extension, format):
+def test_preview_preserves_source(tmp_path, extension, format):
     root = tmp_path / "photos 旅行😀"
     root.mkdir()
     path = root / f"photo.{extension}"
@@ -79,7 +79,7 @@ def test_decompression_pixel_limit(tmp_path, monkeypatch):
         decoder.decode(path)
 
 
-def test_animation_does_not_claim_whole_file_audited(tmp_path):
+def test_animation_is_not_fully_audited(tmp_path):
     path=tmp_path / "animated.gif"
     first=Image.new("RGB", (32,32), "black")
     second=Image.new("RGB", (32,32), "white")
@@ -109,11 +109,11 @@ def test_near_duplicates_and_dark_review_only(tmp_path):
     assert "delete" not in meaningful
 
 
-def test_corrupt_heic_is_not_black_candidate(tmp_path):
+def test_corrupt_heic_produces_no_preview(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     (root / "bad.heic").write_bytes(b"not a valid HEIC")
-    with pytest.raises(Exception):
+    with pytest.raises(UnidentifiedImageError):
         handle(request(root, tmp_path / "cache", "bad.heic"))
     assert not list((tmp_path / "cache").glob("*.jpg"))
 

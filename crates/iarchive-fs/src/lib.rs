@@ -153,7 +153,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
     #[test]
-    fn hash_is_read_only_and_streaming() {
+    fn sha256_preserves_source() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("space 旅行.MOV");
         std::fs::write(&path, b"abc").unwrap();

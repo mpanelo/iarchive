@@ -9,10 +9,10 @@ from iarchive_worker.protocol import serve, validate_request, authorize_request
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_json_cannot_change_worker_authorized_roots(self):
+    def test_roots_cannot_be_overridden(self):
         with self.assertRaises(ValueError):
             authorize_request({"archive_root": "/unrelated", "cache_root": "/cache"}, Path("/photos"), Path("/cache"))
-    def test_error_has_no_dark_metrics_and_next_request_survives(self):
+    def test_request_errors_are_isolated(self):
         def handler(request):
             if request["request_id"] == "bad":
                 raise ValueError("private path or token must not leak")
@@ -25,7 +25,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("private", output.getvalue())
         self.assertEqual(good["status"], "ok")
 
-    def test_traversal_outside_input_and_cache_overlap_are_refused(self):
+    def test_request_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory).resolve()
             root = base / "source"
@@ -38,7 +38,7 @@ class ProtocolTests(unittest.TestCase):
                 with self.assertRaises((ValueError, FileNotFoundError)):
                     validate_request({**request, key: value})
 
-    def test_oversized_line_is_not_split_into_requests(self):
+    def test_oversized_line_stops_protocol(self):
         output = io.StringIO()
         code = serve(io.BytesIO(b"x" * 17000 + b"\n{}\n"), output, lambda _: {})
         self.assertEqual(code, 2)

@@ -46,6 +46,13 @@ try {
         Invoke-CheckedNative cargo @('deny', '--locked', '--all-features', 'check')
         Invoke-CheckedNative uv @('run', '--locked', '--project', 'image-worker', '--group', 'dev', 'pytest', 'image-worker/tests')
         Invoke-CheckedNative uv @('run', '--locked', '--project', 'image-worker', 'python', '-m', 'unittest', 'discover', '-s', 'tests', '-v')
+        $workerEnvironment = $env:UV_PROJECT_ENVIRONMENT
+        try {
+            $env:UV_PROJECT_ENVIRONMENT = Assert-SafeDirectory (Join-Path $repoRoot 'tools\cloud-probe\.venv')
+            Invoke-CheckedNative uv @('run', '--locked', '--project', 'tools/cloud-probe', '--python', '3.12', 'python', '-m', 'unittest', 'discover', '-s', 'tools/cloud-probe', '-v')
+        } finally {
+            $env:UV_PROJECT_ENVIRONMENT = $workerEnvironment
+        }
         Invoke-CheckedNative cargo @('build', '--release', '--locked')
     } else {
         Write-Host 'SmokeOnly: skipping automated quality checks and build.'

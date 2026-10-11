@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(collision_key("E\u{301}.JPG"), collision_key("é.jpg"));
     }
     #[test]
-    fn manifest_inputs_require_normalized_paths() {
+    fn manifest_paths_must_be_normalized() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("a")).unwrap();

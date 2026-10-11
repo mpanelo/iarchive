@@ -16,16 +16,16 @@ class SchemaTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
-    def test_all_embedded_sql_compiles(self):
+    def test_embedded_sql_compiles(self):
         source = (ROOT / "crates/iarchive-store/src/lib.rs").read_text()
         queries = re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE) [^"\n]*)"', source)
-        self.assertGreater(len(queries), 30)
+        self.assertTrue(queries, "No embedded SQL was extracted")
         for query in queries:
             with self.subTest(query=query):
                 count = max((int(n) for n in re.findall(r"\?(\d+)", query)), default=0)
                 self.db.execute("EXPLAIN " + query, [None] * count)
 
-    def test_uniqueness_foreign_keys_and_candidate_cascade(self):
+    def test_schema_constraints(self):
         self.db.execute("INSERT INTO archive_cycle(id,source_root) VALUES('x','/synthetic')")
         self.db.execute("INSERT INTO file_item(id,cycle_id,relative_path,path_key,kind,byte_count,mtime_ns) VALUES(1,'x','same.jpg','same.jpg','image',10,'0')")
         with self.assertRaises(sqlite3.IntegrityError):

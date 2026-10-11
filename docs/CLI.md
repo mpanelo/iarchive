@@ -18,6 +18,7 @@ IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
 cargo deny --locked --all-features check
 uv run --locked --project image-worker --group dev pytest image-worker/tests
 uv run --locked --project image-worker python -m unittest discover -s tests -v
+uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 cargo build --release --locked
 ```
 

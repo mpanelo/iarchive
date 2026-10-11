@@ -29,7 +29,7 @@ foreach ($path in Get-ChildItem -LiteralPath $windowsScripts -Filter '*.ps1' -Re
     Assert-Check ($errors.Count -eq 0) ($errors | Out-String)
 }
 
-Test-Case 'Version probes distinguish compatible, old, broken, and absent uv' {
+Test-Case 'uv version detection' {
     function Find-PrerequisiteApplication { param($Name) if ($present) { 'synthetic-uv' } }
     function Invoke-PrerequisiteProbe { param($Program, $ArgumentList) $response }
     $present = $true
@@ -45,7 +45,7 @@ Test-Case 'Version probes distinguish compatible, old, broken, and absent uv' {
     Assert-Check ($null -eq (Get-PrerequisiteVersion uv)) 'Absent uv accepted.'
 }
 
-Test-Case 'MSVC discovery reuses Community and rejects missing x64 link tools' {
+Test-Case 'MSVC compiler and linker discovery' {
     $vsRoot = New-FreshDirectory (Join-Path $fixtures 'Visual Studio Community')
     $version = '14.40.33807'
     $aux = New-FreshDirectory (Join-Path $vsRoot 'VC\Auxiliary\Build')
@@ -63,7 +63,7 @@ Test-Case 'MSVC discovery reuses Community and rejects missing x64 link tools' {
     Assert-Check ((Get-MsvcInstallation) -eq $vsRoot) 'Community C++ tools were not reused.'
 }
 
-Test-Case 'Discovery failures do not trigger a new Visual Studio installation' {
+Test-Case 'Failed discovery blocks installation' {
     function Get-VswherePath { 'synthetic-vswhere' }
     function Invoke-PrerequisiteProbe { param($Program, $ArgumentList) [pscustomobject]@{ code = 9; text = '' } }
     $refused = $false
@@ -71,7 +71,7 @@ Test-Case 'Discovery failures do not trigger a new Visual Studio installation' {
     Assert-Check $refused 'Failed discovery was treated as missing software.'
 }
 
-Test-Case 'Build Tools discovery handles empty and registered installations' {
+Test-Case 'Build Tools registration discovery' {
     function Get-VswherePath { 'synthetic-vswhere' }
     function Invoke-PrerequisiteProbe {
         param($Program, $ArgumentList)
@@ -84,7 +84,7 @@ Test-Case 'Build Tools discovery handles empty and registered installations' {
     Assert-Check ($instance.installationPath -eq 'C:\Synthetic Build Tools' -and $instance.channelId -eq 'VisualStudio.17.Release') 'Build Tools instance metadata was lost.'
 }
 
-Test-Case 'SDK detection requires headers and both x64 libraries' {
+Test-Case 'SDK header and library discovery' {
     $sdkRoot = New-FreshDirectory (Join-Path $fixtures 'Windows Kits')
     function Get-WindowsSdkRoots { $sdkRoot }
     $version = '10.0.22621.0'
@@ -102,7 +102,7 @@ Test-Case 'SDK detection requires headers and both x64 libraries' {
     Assert-Check ((Get-WindowsSdkInstallation) -eq (Join-Path $sdkRoot "Include\$version")) 'Complete SDK was not reused.'
 }
 
-Test-Case 'Complete prerequisites skip all installers and do not require WinGet' {
+Test-Case 'Installed prerequisites skip installers' {
     function Update-SessionToolPath {}
     function Get-SetupPrerequisites { [pscustomobject]@{ rust = $true; uv = $true; uv_installed = $true; msvc = 'Community'; sdk = 'SDK' } }
     function Find-PrerequisiteApplication { throw 'WinGet discovery must not run.' }
@@ -111,7 +111,7 @@ Test-Case 'Complete prerequisites skip all installers and do not require WinGet'
     Initialize-WindowsPrerequisites -SkipPrerequisites
 }
 
-Test-Case 'A missing SDK installs only the SDK and reruns skip installation' {
+Test-Case 'SDK installation is idempotent' {
     $script:sdkInstalled = $false
     $script:installCount = 0
     function Update-SessionToolPath {}
@@ -129,7 +129,7 @@ Test-Case 'A missing SDK installs only the SDK and reruns skip installation' {
     Assert-Check ($script:installCount -eq 1) 'SDK was installed more than once.'
 }
 
-Test-Case 'C++ installation supplying an SDK avoids a second SDK installer' {
+Test-Case 'C++ setup avoids redundant SDK installation' {
     $script:cppInstalled = $false
     $script:installCount = 0
     function Update-SessionToolPath {}
@@ -147,7 +147,7 @@ Test-Case 'C++ installation supplying an SDK avoids a second SDK installer' {
     Assert-Check ($script:installCount -eq 1) 'Redundant installation occurred.'
 }
 
-Test-Case 'Old uv is upgraded without touching installed Rust or C++ tools' {
+Test-Case 'uv upgrade preserves installed tools' {
     $script:uvUpgraded = $false
     function Update-SessionToolPath {}
     function Get-SetupPrerequisites { [pscustomobject]@{ rust = $true; uv = $script:uvUpgraded; uv_installed = $true; msvc = 'MSVC'; sdk = 'SDK' } }
@@ -160,7 +160,7 @@ Test-Case 'Old uv is upgraded without touching installed Rust or C++ tools' {
     Initialize-WindowsPrerequisites
 }
 
-Test-Case 'SkipPrerequisites reports missing tools without invoking installers' {
+Test-Case 'Check-only setup reports missing tools' {
     function Update-SessionToolPath {}
     function Get-SetupPrerequisites { [pscustomobject]@{ rust = $false; uv = $true; uv_installed = $true; msvc = 'MSVC'; sdk = 'SDK' } }
     function Find-PrerequisiteApplication { throw 'WinGet must not run in check-only mode.' }
@@ -170,7 +170,7 @@ Test-Case 'SkipPrerequisites reports missing tools without invoking installers' 
     Assert-Check $refused 'Missing Rust was not reported.'
 }
 
-Test-Case 'Missing WinGet reports prerequisites before attempting installation' {
+Test-Case 'Missing WinGet blocks installation' {
     function Update-SessionToolPath {}
     function Get-SetupPrerequisites { [pscustomobject]@{ rust = $false; uv = $true; uv_installed = $true; msvc = 'MSVC'; sdk = 'SDK' } }
     function Find-PrerequisiteApplication { param($Name) $null }
@@ -180,7 +180,7 @@ Test-Case 'Missing WinGet reports prerequisites before attempting installation' 
     Assert-Check $refused 'Missing WinGet did not produce instructions.'
 }
 
-Test-Case 'Failed installers and unchanged detection stop setup' {
+Test-Case 'Failed or ineffective installers stop setup' {
     function Update-SessionToolPath {}
     function Get-SetupPrerequisites { [pscustomobject]@{ rust = $false; uv = $true; uv_installed = $true; msvc = 'MSVC'; sdk = 'SDK' } }
     function Find-PrerequisiteApplication { param($Name) 'synthetic-winget' }
@@ -194,7 +194,7 @@ Test-Case 'Failed installers and unchanged detection stop setup' {
     Assert-Check $refused 'Installer success without usable tools was accepted.'
 }
 
-Test-Case 'Installer commands use exact packages and prevent forced reboots' {
+Test-Case 'Installer package and reboot guards' {
     function Get-BuildToolsInstance { $null }
     function Invoke-CheckedNative {
         param($Program, $ArgumentList)

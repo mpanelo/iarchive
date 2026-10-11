@@ -67,12 +67,12 @@ class AlbumTests(unittest.TestCase):
                 return SimpleNamespace(raise_for_status=lambda: None, json=lambda: value)
         return SimpleNamespace(session=Session(), params={}, calls=calls)
 
-    def test_named_album_is_unique_and_no_full_library_query_is_used(self):
+    def test_album_lookup_is_scoped(self):
         service = self.service([{"records": [album_record("Other", "other"), album_record()]}])
         self.assertEqual(find_album(service, ROOT, ZONE, NAME), ALBUM)
         self.assertEqual(set(service.calls[0]["desiredKeys"]), ALBUM_KEYS)
 
-    def test_absent_duplicate_undecodable_and_partial_album_lists_block(self):
+    def test_invalid_album_lists_are_rejected(self):
         invalid = [{"records": []}, {"records": [album_record(), album_record(identity="other")]},
                    {"records": [album_record()], "moreComing": True},
                    {"records": [{"recordName": "bad", "fields": {"albumNameEnc": {"value": "!"}}}]},
@@ -81,7 +81,7 @@ class AlbumTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(AlbumBlocked):
                 find_album(self.service([value]), ROOT, ZONE, NAME)
 
-    def test_transport_blocks_wrong_album_zone_sensitive_fields_and_modification(self):
+    def test_transport_enforces_album_scope(self):
         calls = []
         class Adapter:
             def send(self, request, **kwargs):
@@ -114,7 +114,7 @@ class AlbumTests(unittest.TestCase):
                 self.assertEqual(state["asset_metadata_requests"], 1)
         self.assertEqual(len(calls), 1)
 
-    def test_asset_queries_require_discovered_album_and_metadata_scope(self):
+    def test_queries_require_metadata_authorization(self):
         body = list_body(ZONE, ALBUM, 0)
         self.assertIsNone(query_kind(body, ZONE, None))
         self.assertIsNone(query_kind(body, None, ALBUM))
@@ -127,7 +127,7 @@ class AlbumTests(unittest.TestCase):
                 with self.assertRaises(ProbeBlocked):
                     Adapter().send(SimpleNamespace(method="POST", url=PRIVATE + "/records/query", body=json.dumps(body)))
 
-    def test_safe_metadata_preserves_full_ids_and_opaque_checksum_without_secrets(self):
+    def test_metadata_is_preserved_without_secrets(self):
         value = [safe_record(record) for record in pair()]
         encoded = json.dumps(value)
         self.assertNotIn("SECRET", encoded)
@@ -136,7 +136,7 @@ class AlbumTests(unittest.TestCase):
         resource = value[1]["fields"]["resOriginalRes"]
         self.assertEqual(resource, {"size": 7, "fileChecksum": "opaque-checksum", "download_url_present": True})
 
-    def test_missing_change_tag_checksum_and_resource_size_block(self):
+    def test_incomplete_records_are_rejected(self):
         examples = []
         record = pair()[0]
         record.pop("recordChangeTag")
@@ -151,7 +151,7 @@ class AlbumTests(unittest.TestCase):
             with self.subTest(record=record), self.assertRaises(AlbumBlocked):
                 safe_record(record)
 
-    def test_pagination_retains_progress_and_checks_counts_and_relationships(self):
+    def test_pagination_retains_progress(self):
         service = self.service(pass_responses())
         progress = []
         result = collect_pass(service, ROOT, ZONE, ALBUM, lambda page, value: progress.append(value))
@@ -162,7 +162,7 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(ranks, [0, 1])
         self.assertNotIn("opaque-token", json.dumps(result))
 
-    def test_count_drift_duplicate_ids_and_incomplete_relationships_block(self):
+    def test_inconsistent_inventory_is_rejected(self):
         drift = pass_responses()
         drift[-1] = count_response(2)
         duplicate = [count_response(), {"records": pair()}, {"records": pair()}]
@@ -172,14 +172,14 @@ class AlbumTests(unittest.TestCase):
             with self.subTest(responses=responses), self.assertRaises(AlbumBlocked):
                 collect_pass(self.service(responses), ROOT, ZONE, ALBUM)
 
-    def test_per_record_errors_and_unresolved_continuation_block(self):
+    def test_incomplete_pages_are_rejected(self):
         for records_value in ({"records": [{"serverErrorCode": "CONFLICT"}]},
                               {"records": [], "moreComing": True},
                               {"records": [{"recordType": "Unexpected"}]}):
             with self.subTest(value=records_value), self.assertRaises(AlbumBlocked):
                 collect_pass(self.service([count_response(), records_value]), ROOT, ZONE, ALBUM)
 
-    def test_unknown_schema_diagnostics_do_not_expose_field_values(self):
+    def test_schema_diagnostics_hide_private_values(self):
         response = {"records": [{"recordType": "CPLNewSchema", "recordName": "SECRET_ID"},
                                  {"recordType": "https://SECRET_URL"}]}
         with self.assertRaises(AlbumBlocked) as caught:
@@ -188,13 +188,13 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(diagnostics["record_type_counts"], {"CPLNewSchema": 1, "unrecognized_schema_label": 1})
         self.assertNotIn("SECRET", json.dumps(diagnostics))
 
-    def test_count_is_bounded_and_batch_errors_are_not_success(self):
+    def test_invalid_counts_are_rejected(self):
         for response in (count_response(1001), count_response(True), {"batch": []},
                          {"batch": [{"records": [{"serverErrorCode": "CONFLICT"}]}]}):
             with self.subTest(response=response), self.assertRaises(AlbumBlocked):
                 album_count(self.service([response]), ROOT, ZONE, ALBUM)
 
-    def test_two_matching_passes_do_not_prove_generation_or_resource_completeness(self):
+    def test_matching_passes_do_not_prove_coverage(self):
         responses = [{"records": [album_record()]}] + pass_responses() + pass_responses()
         private, summary = collect_album(self.service(responses), ROOT,
                                          {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {})
@@ -204,7 +204,7 @@ class AlbumTests(unittest.TestCase):
         for field in ("inventory_generation_guarantee", "complete_resource_inventory", "content_mapping"):
             self.assertEqual(summary[field], "NOT VERIFIED")
 
-    def test_same_count_with_changed_tags_is_detected(self):
+    def test_tag_drift_is_detected(self):
         second = pass_responses()
         second[1]["records"][0]["recordChangeTag"] = "changed"
         responses = [{"records": [album_record()]}] + pass_responses() + second
@@ -212,7 +212,7 @@ class AlbumTests(unittest.TestCase):
                                    {"private": [{"zone_id": ZONE, "deleted": None}]}, NAME, {})
         self.assertFalse(summary["two_passes_match"])
 
-    def test_album_membership_records_are_preserved_and_compared(self):
+    def test_membership_drift_is_detected(self):
         relation = {"recordName": "full-relation", "recordType": "CPLContainerRelation",
                     "recordChangeTag": "relation-tag", "fields": {}}
         first, second = pass_responses(), pass_responses()
@@ -225,7 +225,7 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(summary["observed_album_relations"], 1)
         self.assertFalse(summary["two_passes_match"])
 
-    def test_session_reuse_only_reads_sanitized_summary_and_rejects_links(self):
+    def test_session_reuse_is_scoped(self):
         with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
             repo = Path(directory)
             run = repo / ".smoke" / "cloud-probe-synthetic"
