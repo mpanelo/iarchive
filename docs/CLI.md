@@ -67,11 +67,11 @@ Default state comes from `directories::ProjectDirs`: `%LOCALAPPDATA%\iarchive\da
 For automated setup, quality checks, synthetic smoke tests, and optional external-drive tests, use the [Windows setup and test scripts](windows-testing.md):
 
 ```powershell
-.\scripts\windows\setup.ps1
-.\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\setup.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
 ```
 
-Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup requires existing prerequisites and does not install system tools. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
+Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup automatically reuses compatible prerequisites and installs missing ones through WinGet; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` to check without installing. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
 
 Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI; real external-drive workflows still need separate runtime checks.
 

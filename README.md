@@ -56,7 +56,7 @@ target/release/iarchive --state-dir .smoke/demo-state export-manifest --cycle de
 
 The example uses macOS shell syntax. See the [Windows PowerShell instructions](docs/CLI.md#windows-11-x64--powershell) for Windows builds and commands.
 
-Windows users, including Windows Home users, can use the [setup and test scripts](docs/windows-testing.md) from the repository root after cloning in a directory of their choice. Run `scripts\windows\setup.ps1`, then `scripts\windows\test.ps1`. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
+Windows users, including Windows Home users, can use the [setup and test scripts](docs/windows-testing.md) from the repository root after cloning in a directory of their choice. Run `scripts\windows\setup.ps1` to detect existing prerequisites and install missing ones through WinGet, then `scripts\windows\test.ps1`. Project tools and caches stay in the checkout; prerequisite installers can change Windows outside it. The guide includes commands for running scripts with a process-only execution policy. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
 
 `report` displays saved candidate groups, image measurements, errors, and preview paths. Open the preview JPEGs in a local image viewer. The fixture generator and manifest exporter refuse to overwrite existing destinations; use fresh paths when repeating the demo.
 

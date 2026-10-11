@@ -29,10 +29,18 @@ jobs:
         with:
           version: '0.12.3'
           python-version: '3.12'
+      - name: Test prerequisite detection with simulated installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/tests/prerequisites.Tests.ps1 -CheckInstalled
+      - name: Test prerequisite detection in Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/windows/tests/prerequisites.Tests.ps1 -CheckInstalled
       - name: Set up Windows checkout
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/windows/setup.ps1
+        run: ./scripts/windows/setup.ps1 -SkipPrerequisites
       - name: Run Windows checks and script smoke tests
         if: runner.os == 'Windows'
         shell: pwsh

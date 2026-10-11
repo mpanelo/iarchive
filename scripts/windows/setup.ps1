@@ -2,21 +2,29 @@
 <#
 .SYNOPSIS
 Prepare the checkout's Rust/Python tools and build iarchive on Windows.
-Requires existing rustup, uv, and MSVC prerequisites. Project tools and caches
-stay inside the checkout. No system installers or persistent settings changes.
+Detect and reuse installed prerequisites; install missing tools through WinGet.
+Prerequisite installers can change Windows outside the checkout. Project tools
+and caches stay inside the checkout.
+.PARAMETER SkipPrerequisites
+Check prerequisites without installing or upgrading any of them.
 #>
 [CmdletBinding()]
-param()
+param([switch]$SkipPrerequisites)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 . (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'prerequisites.ps1')
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $environment = $null
+$previousPath = $env:PATH
+$previousEncoding = [Console]::OutputEncoding
 Push-Location $repoRoot
 try {
     Assert-WindowsHost
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    Initialize-WindowsPrerequisites -SkipPrerequisites:$SkipPrerequisites
     foreach ($tool in @('rustup', 'cargo', 'uv')) { Require-Application $tool }
     Assert-UvVersion
     $environment = Enter-ProjectEnvironment $repoRoot
@@ -37,6 +45,8 @@ try {
     exit 1
 } finally {
     Restore-ProjectEnvironment $environment
+    $env:PATH = $previousPath
+    [Console]::OutputEncoding = $previousEncoding
     Pop-Location
 }
 exit 0

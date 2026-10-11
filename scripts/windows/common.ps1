@@ -9,7 +9,7 @@ function Assert-WindowsHost {
 function Require-Application {
     param([string]$Name)
     if (-not (Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue)) {
-        throw "Missing $Name. Install prerequisites in your chosen Windows environment; see docs/windows-testing.md."
+        throw "Missing $Name. Run scripts\windows\setup.ps1 to install missing prerequisites; see docs/windows-testing.md."
     }
 }
 
