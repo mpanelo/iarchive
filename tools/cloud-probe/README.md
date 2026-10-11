@@ -82,6 +82,57 @@ authentication summary is accepted. Upstream revalidates the session and may
 still request credentials or verification. It updates that previous run's sensitive
 cookie cache; the new run gets its own output directory. Run only one probe at a time.
 
+## Resource observations
+
+Album metadata runs also create `resource-report-private.json`. Each observed
+resource remains a separate entry with its full owner-record identity and change
+tag, field name, declared size, opaque checksum, file type, and URL availability.
+The report retains the album and zone identities. Asset entries reference those
+resources through the returned `masterRef`; duplicate names or checksums do not
+merge entries. Signed URLs and wrapping keys are removed before persistence.
+
+The labels describe returned fields rather than proving their media contents:
+
+| Returned resource fields | Report label |
+|---|---|
+| `resOriginalRes` | Original |
+| `resOriginalAltRes` | Alternate original |
+| `resOriginalVidComplRes` | Original video companion |
+| `resJPEGFullRes`, `resVidFullRes` | Full image or video |
+| `resSidecarRes` | Sidecar |
+| Other requested JPEG/video sizes | Preview image or video |
+| Unexpected returned resource fields | Unknown |
+
+These field interpretations follow the [pinned provider source](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/pyicloud_ipd/services/photos.py).
+The helper inventories the requested raw fields rather than relying on the
+provider's version lookup, which does not include every requested field.
+It makes no extra metadata queries to generate this report.
+
+Findings include an absent original, metadata without a corresponding resource,
+the same resource field on both asset and master, shared or unreferenced masters,
+unknown fields, empty resources, and missing file types or URLs. Both owners'
+entries remain present when ownership is ambiguous. Pair confidence stays
+`unknown`: a record association alone does not prove a Live Photo or RAW/JPEG
+relationship within the media bytes. Printed summaries contain only role and
+finding counts; full identities and unexpected field labels remain private.
+
+The offline fixture suite covers Live Photo still/motion, video, original/full-size
+render, sidecar, and RAW/JPEG examples, including either RAW/JPEG resource order.
+`resources.build_resource_report()` can also compare a sanitized observation with
+an explicit mapping from full asset IDs to exact expected resource-field lists.
+It reports missing and unexpected fields and how many assets had expectations.
+Those expectations describe the caller's disposable fixtures; they are not
+inferred from filenames, opaque subtype flags, or checksums. Live runs currently
+report `expectation_status: NOT PROVIDED`.
+
+Even `MATCHED OBSERVED FIELDS` proves only that the supplied field expectations
+matched the observed metadata without resource findings. No media content is
+verified by this report. The query requests a known projection of fields, so
+unreturned or unknown variants may remain undiscovered. Complete resource
+inventory, content mapping, and the provider checksum algorithm remain
+`NOT VERIFIED`. A live variant test needs a separately agreed disposable album
+and read/download scope.
+
 ## Two approved originals
 
 This separate scope requires explicit download approval and a successful metadata
@@ -129,7 +180,11 @@ Each run creates a new ignored directory beneath `.smoke/cloud-probe-*`:
   and never commit, upload or paste them into chat. On macOS the run directory
   is created with mode `0700` and files with a restrictive process umask.
 - `album-private.json`: full album, asset and master IDs, change tags and sanitized
-  resource metadata from both passes. Keep local; it contains account-specific IDs.
+  resource metadata from both passes, plus the resource report for the second
+  pass. Keep local; it contains account-specific IDs.
+- `resource-report-private.json`: separate resource entries, full owner bindings,
+  asset/master associations, and findings for the observed resource metadata.
+  `metadata_passes_match` records whether the two observations agreed. Keep local.
 - `album-pass-*-page-*.json`: sanitized page progress, retained even if interrupted.
   These partial pages are explicitly incomplete; use the summary to check completion.
 - `copy-a/` and `copy-b/`: the two downloaded originals and their local copies,

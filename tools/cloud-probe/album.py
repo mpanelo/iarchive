@@ -6,12 +6,13 @@ import hashlib
 import json
 import re
 
+from resources import (RESOURCE_PREFIXES, RESOURCE_ROLES, build_resource_report,
+                       is_resource_field, is_resource_metadata_field)
+
 
 MAX_ASSETS = 1000
 PAGE_SIZE = 100
-PREFIXES = ("resOriginal", "resOriginalAlt", "resOriginalVidCompl", "resJPEGFull",
-            "resVidFull", "resSidecar", "resJPEGLarge", "resJPEGMed", "resJPEGThumb",
-            "resVidMed", "resVidSmall")
+PREFIXES = RESOURCE_PREFIXES
 CORE_KEYS = {"recordName", "recordType", "recordChangeTag", "masterRef", "itemType",
              "dataClassType", "isDeleted", "isExpunged", "assetSubtype", "assetSubtypeV2",
              "adjustmentType", "adjustmentRenderType", "vidComplVisibilityState"}
@@ -167,7 +168,9 @@ def safe_record(record):
     if not isinstance(fields, dict):
         raise AlbumBlocked("Record fields were not an object")
     for key, entry in fields.items():
-        if key not in CORE_KEYS | RESOURCE_KEYS:
+        if isinstance(key, str) and key.startswith("res") and key.endswith("Res") and not is_resource_field(key):
+            raise AlbumBlocked("Unexpected resource field label")
+        if key not in CORE_KEYS | RESOURCE_KEYS and not is_resource_metadata_field(key):
             continue
         if not isinstance(entry, dict) or "value" not in entry:
             raise AlbumBlocked("Requested metadata field was malformed")
@@ -260,17 +263,25 @@ def collect_album(service, root, zones, name, transport, progress=None, original
     comparison = lambda result: canonical({key: result[key] for key in ("assets", "masters", "relations")})
     resource_counts = {}
     missing_urls = 0
+    unknown_resources = 0
     for record in (*second["assets"], *second["masters"]):
         for field, value in record["fields"].items():
-            if field.endswith("Res"):
-                resource_counts[field] = resource_counts.get(field, 0) + 1
+            if is_resource_field(field):
+                if field in RESOURCE_ROLES:
+                    resource_counts[field] = resource_counts.get(field, 0) + 1
+                else:
+                    unknown_resources += 1
                 missing_urls += not value["download_url_present"]
-    private = {"zone_id": zone, "album_id": album_id, "passes": [first, second]}
+    resource_report = build_resource_report(second)
+    private = {"zone_id": zone, "album_id": album_id, "passes": [first, second],
+               "resource_report": resource_report}
     summary = {"observed_assets": len(second["assets"]), "observed_masters": len(second["masters"]),
                "observed_album_relations": len(second["relations"]),
                "resource_field_counts": resource_counts, "resources_without_urls": missing_urls,
+               "unrecognized_resource_fields": unknown_resources,
                "two_passes_match": comparison(first) == comparison(second),
                "inventory_generation_guarantee": "NOT VERIFIED",
                "complete_resource_inventory": "NOT VERIFIED", "content_mapping": "NOT VERIFIED",
                "sync_token_returned": any(page["sync_token_present"] for result in (first, second) for page in result["pages"])}
+    summary.update(resource_report["summary"])
     return private, summary

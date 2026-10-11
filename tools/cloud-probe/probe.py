@@ -311,6 +311,10 @@ def main() -> int:
                 private, album_report = collect_album(service, photo_root, zones, args.album, transport, progress, original_urls)
                 save_new(run / "album-private.json", private)
                 report.update(album_report)
+                save_new(run / "resource-report-private.json", {
+                    "database": "private", "zone_id": private["zone_id"], "album_id": private["album_id"],
+                    "metadata_passes_match": report["two_passes_match"], **private["resource_report"],
+                })
                 if not report["two_passes_match"]:
                     raise ProbeBlocked("The two metadata passes differed")
                 report["album_metadata_completed"] = True
