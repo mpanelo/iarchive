@@ -1,0 +1,14 @@
+[project]
+name = "iarchive-cloud-probe"
+version = "0.1.0"
+description = "Explicitly scoped, read-only cloud feasibility research"
+requires-python = ">=3.12,<3.14"
+dependencies = ["icloudpd==1.32.3"]
+
+[tool.uv]
+package = false
+
+# The platform wheels bundle executables rather than importable provider code.
+# Select the official pure-Python release so the request guard can wrap transport.
+[tool.uv.sources]
+icloudpd = { url = "https://files.pythonhosted.org/packages/b9/73/20544e68569fce262d596ebe42730aac235b8e69a36edefebdf8cfa85508/icloudpd-1.32.3-py3-none-any.whl" }
