@@ -29,6 +29,8 @@ jobs:
         with:
           version: '0.12.3'
           python-version: '3.12'
+          # Windows scripts scope uv's cache to the checkout.
+          cache-local-path: ${{ runner.os == 'Windows' && format('{0}/.windows-sandbox/uv-cache', github.workspace) || '' }}
       - name: Test prerequisite detection with simulated installers
         if: runner.os == 'Windows'
         shell: pwsh
