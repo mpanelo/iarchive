@@ -89,10 +89,10 @@ its own same-volume synthetic source and replica; this exercises byte copying,
 not independence between drives.
 
 After those tests pass, follow the [Windows two-drive acceptance plan](windows-two-drive-test.md).
-It creates a fresh synthetic source on one drive and an empty replica on the
-other, checks independent PowerShell hashes and restores state from each drive's
-backup. It also checks conflicts, missing files and unavailable roots, with a
-separate optional interruption/resume exercise. Do not reuse the test script's
+Its script creates a fresh synthetic source on one drive and an empty replica on
+the other, checks independent PowerShell hashes and restores state from each
+drive's backup. It also checks conflicts, missing files and unavailable roots,
+with an optional process-interruption/resume check. Do not reuse the test script's
 completed fixture: it includes deliberately invalid files.
 
 Windows binds volume GUIDs and root file identities. Native read-only queries

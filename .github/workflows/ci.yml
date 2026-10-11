@@ -47,6 +47,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/windows/test.ps1 -ExternalDrives 'C:'
+      - name: Test replica acceptance workflow
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/tests/replication.Tests.ps1
+      - name: Test replica workflow in Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/windows/tests/replication.Tests.ps1
       - name: Check Windows PowerShell compatibility
         if: runner.os == 'Windows'
         shell: powershell
@@ -71,5 +79,8 @@ jobs:
         uses: actions/upload-artifact@v7.0.2
         with:
           name: windows-script-reports
-          path: .smoke/windows-*/**/*.json*
+          path: |
+            .smoke/windows-*/**/*.json*
+            .smoke/replica-script-tests-*/**/*.json*
+            .smoke/replica-script-tests-*/**/*.log
           include-hidden-files: true
