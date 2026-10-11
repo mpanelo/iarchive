@@ -10,13 +10,39 @@ Rust 2024 with a declared minimum Rust 1.85, bundled rusqlite, serde/TOML, clap,
 
 ## State and resuming
 
-SQLite schema version 1 creates cycles, scan runs, file facts, analysis, candidates, memberships, issues, and transactional transition history. Foreign keys and WAL are enabled. An advisory lock serializes CLI writers. A newer DB schema is rejected. Status shows last recorded state, not live filesystem assurance.
+SQLite schema version 1 creates cycles, scan runs, file facts, analysis, candidates, memberships, issues, and transactional transition history. Version 2 adds frozen replica bindings, replica runs and per-file copy progress through a transactional migration; JSONL schemas remain version 1. Foreign keys and WAL are enabled. An advisory lock serializes CLI writers. A newer DB schema is rejected. Status shows last recorded state, not live filesystem assurance.
 
 Existing downloads enter `IMPORTED`, not `DOWNLOADED`: this app has no evidence that iPhone sync or remote download coverage completed. A scan first records `INDEXING` and invalidates prior completion/candidates. Each completed file is committed independently, so an interrupted run can reuse unchanged path/size/nanosecond-mtime hashes. Missing records are marked only after a complete traversal; interrupted traversals do not invent missing files. Errors and retained missing records prevent completion. Restoring a missing file and rerunning can recover completion; accepting a changed snapshot requires a separate cycle, not silently dropping its history.
 
-Hashing uses a 1 MiB reader and 64 KiB blocks, with size/mtime checks before and after. Every regular file is hashed, including unknown formats and sidecars. Exact equality means byte equality only; filename/stem never proves equivalence or a cloud asset ID. Known decode failures are excluded from audit candidates. Duplicate results include cross-cycle provenance, although other cycles' cached facts are last-scan records, not current verification. Hash/source changes invalidate associated analysis and candidates. Mtime caching can miss deliberately preserved metadata changes: `index --deep` bypasses it. Independent replica verification is not implemented.
+Hashing uses a 1 MiB reader and 64 KiB blocks, with size/mtime checks before and after. Every regular file is hashed, including unknown formats and sidecars. Exact equality means byte equality only; filename/stem never proves equivalence or a cloud asset ID. Known decode failures are excluded from audit candidates. Duplicate results include cross-cycle provenance, although other cycles' cached facts are last-scan records, not current verification. Hash/source changes invalidate associated analysis and candidates. Mtime caching can miss deliberately preserved metadata changes: `index --deep` bypasses it. Replica operations independently rehash both roots without this cache.
 
-The JSONL export streams from SQLite, includes a versioned summary and all file records (including missing/error records), and uses a temporary file, fsync, and a no-clobber persist. Explicit exports cannot write inside media or app state. They are local inventory manifests, not verified backup manifests. The app does not create independently verified manifests or state backups on two drives.
+The JSONL export streams from SQLite, includes a versioned summary and all file records (including missing/error records), and uses a temporary file, fsync, and a no-clobber persist. Explicit exports cannot write inside media or app state. They are local inventory manifests, not verified backup manifests. Replica operations separately publish deeply verified manifests, summaries and standalone SQLite backups to explicit artifact directories on both volumes and app state. The SQLite online backup API includes WAL contents; copying a live main database file is not sufficient.
+
+## Replication and verification
+
+The filesystem layer freezes a complete raw file inventory, binds mount/root
+identities, and hashes existing targets before copying anything. Conflicts,
+extra targets, linked entries, partial input, collisions and traversal errors
+stop preflight. Unknown or undecodable media remains eligible for byte copying;
+image-review candidates never filter the archive.
+
+Copies stream into retained `.partial` files outside media on the secondary
+volume, sync bytes/mtime, and publish with `tempfile::persist_noclobber`. Existing
+matching files are skipped only after hashing. Final full inventories independently
+rehash both roots and reject changes. Resume restarts unfinished files from zero;
+it does not trust partial bytes or the index cache. Per-file progress is durable
+in SQLite, and prior completion is invalidated at the start of a new operation.
+
+A success bundle contains identical JSONL manifests, a standalone database backup
+and a summary with artifact digests in three locations. Publication is not a
+cross-volume transaction; a failure invalidates live completion and leaves partial
+artifacts explicitly historical. Restore a backup into fresh state and reverify.
+See [the replication guide](replication.md) for commands, limits and recovery.
+
+Windows identity checks use Microsoft's documented
+[volume disk extents](https://learn.microsoft.com/windows/win32/api/winioctl/ni-winioctl-ioctl_volume_get_volume_disk_extents)
+and [storage property queries](https://learn.microsoft.com/windows/win32/api/winioctl/ni-winioctl-ioctl_storage_query_property).
+SQLite backups use the [rusqlite backup API](https://docs.rs/rusqlite/0.40.2/rusqlite/backup/index.html).
 
 ## Worker and audit
 
@@ -36,7 +62,7 @@ Audit refreshes membership before analysis and deeply hashes every image before/
 
 - CI uses committed locks, checks Rust formatting and Clippy, and runs Rust/Python tests with HEIC on macOS and Windows. Dependency advisory, license, version, and source checks run separately on Linux. These synthetic checks do not prove real-drive archive safety.
 - Doctor reports free space, availability, permission metadata, optional tool checks, and worker readiness. It does not prove separate physical disks or exercise archive writes. `icloudpd` installations available only through uvx remain unverified; no upstream install/download/auth is launched by doctor. Version 1.32.3 is a candidate pin from the handoff, not a compatibility claim.
-- No native volume/filesystem identity API or swapped-drive binding is implemented. Drive identity, capacity guards, and independent physical disks are not proven by the current commands.
+- Replica commands bind root/volume identities and capacity preflight. Unix uses filesystem device/inode identities and retains physical independence as NOT VERIFIED. Windows uses volume GUIDs, root file identities, disk extents and a conservative storage-bus query. Driver-reported topology can identify distinct backing disks but is not a guarantee against virtualization or inaccurate drivers. Real Windows USB behavior still needs runtime testing.
 - Classification uses extension, not MIME/content metadata. Capture timestamps, ContentIdentifier, original/edited labels and Live Photo/RAW relationships remain unknown. Each file variant stays independent.
 - Memory is bounded with respect to file byte size. Candidate/path/feature lists use memory proportional to file count. Per-file SQLite durability and Python startup favor resume correctness over HDD throughput; a 200 GiB benchmark remains unrun.
 - Source directories are not OS snapshots. Pause concurrent downloader/file edits for a stable scan. Checks resist ordinary path escapes, but do not claim a sandbox against an adversarial process racing directory replacements. Future high-risk actions require stronger stable handles and revalidation.

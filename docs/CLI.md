@@ -56,10 +56,12 @@ All commands have `--help`, global `--state-dir`, `--json`, and `--dry-run`. Dry
 - `index --cycle ID [--deep]`: hash all regular files; resume unchanged records using metadata unless `--deep`. Corrupt image bytes may still be hashable: run audit for decode validity.
 - `audit --cycle ID [--categories exact,similar,dark] [--worker-project PATH] [--timeout-seconds 60] [--cache-limit-mib 1024]`: local candidate generation; no file actions. `--categories exact` needs no Python and deliberately reports an incomplete visual audit.
 - `export-manifest --cycle ID --output PATH`: atomic, non-overwriting JSONL export outside media/app state. Partial/error inventories remain exportable but exit 2.
+- `replicate --cycle ID --secondary PATH --primary-artifacts PATH --secondary-artifacts PATH`: non-overwriting raw copy and independent uncached hashing of both roots. Existing roots and separate artifact directories are required; see [replication](replication.md).
+- `verify --cycle ID --deep --secondary PATH --primary-artifacts PATH --secondary-artifacts PATH`: independently rehash the frozen file set without copying media. Both commands require `--allow-unverified-devices` when physical independence cannot be proved; acknowledgment does not verify independence.
 - `status --cycle ID`, `report --cycle ID`: view recorded state/results; no fresh verification.
 - `doctor [--primary PATH] [--secondary PATH]`: free space, availability, optional uv/ffprobe/icloudpd checks and default worker probe. It does not install anything or prove physical disks distinct.
 
-Exit 0 = requested operation completed (not a backup-safety claim). Exit 1 = invocation/config/state/process error. Exit 2 = completed report with incomplete inventory/visual audit or unavailable requested drive. A mixed library with videos can be indexed successfully while its visual audit remains incomplete.
+Exit 0 = requested operation completed (not a backup-safety claim). Exit 1 = invocation/config/state/process error. Exit 2 = completed report with incomplete inventory/visual audit/replica checks or unavailable requested drive. A mixed library with videos can be indexed successfully while its visual audit remains incomplete.
 
 Default state comes from `directories::ProjectDirs`: `%LOCALAPPDATA%\iarchive\data` on Windows and `~/Library/Application Support/iarchive` on macOS. Use an explicit state path when diagnosing configuration. The worker defaults to `image-worker` under the current working directory; pass `--worker-project` when running the executable elsewhere. The worker currently requires a local checkout and its Python environment.
 
@@ -69,7 +71,7 @@ For automated setup, quality checks, synthetic smoke tests, and optional externa
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\setup.ps1
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "& '.\scripts\windows\test.ps1' -ExternalDrives 'D:', 'E:'"
 ```
 
 Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup automatically reuses compatible prerequisites and installs missing ones through WinGet; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` to check without installing. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
@@ -99,4 +101,4 @@ Only after dependency/platform checks and synthetic dry runs pass, these are the
 & $iarchiveExe report --cycle 2026-10-10
 ```
 
-No E: bytes are copied, verified, or pruned by these commands. Do not interpret local counts as remote library coverage.
+The inventory commands above do not copy or prune E: bytes. Replication requires the separate commands and explicit artifact paths in the [replication guide](replication.md). Do not interpret local counts as remote library coverage.

@@ -3,7 +3,7 @@
 [![Checks](https://github.com/mpanelo/iarchive/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mpanelo/iarchive/actions/workflows/ci.yml)
 [MIT license](LICENSE)
 
-A local command-line tool for taking inventory of photo archives and finding exact duplicates, visually similar images, and dark-photo candidates.
+A local command-line tool for taking inventory of photo archives and finding exact duplicates, visually similar images, and dark-photo candidates, with raw file replication and deep byte verification.
 
 > [!WARNING]
 > **Active development — experimental software.** Commands, report formats, and the state schema may change. Start with the synthetic demo below. Local inventory and image reports do not prove that an archive is fully backed up or that an iCloud library is completely downloaded.
@@ -17,8 +17,9 @@ iarchive works with files already on disk, including existing iCloud Photos down
 - Perceptual similarity and brightness measurements that identify candidates for human review.
 - SQLite state and scan caching to resume interrupted work and reuse unchanged results.
 - JSON reports and exportable JSON Lines manifests, with explicit findings for missing, partial, unsupported, and undecodable files.
+- Non-overwriting raw replication, uncached verification of both local copies, and standalone manifest/database backup bundles.
 
-The current implementation is read-only on source media. Cloud authentication and downloads, archive replication, independent backup verification, a browser gallery, quarantine, and deletion are unavailable. Reports show local replication and cloud coverage as **NOT VERIFIED**. Duplicate and dark-photo candidates are suggestions for review, never deletion decisions.
+The implementation keeps source media read-only and writes copies only to an explicitly selected secondary directory. Cloud authentication and downloads in the archive CLI, a browser gallery, quarantine, and deletion are unavailable. Replication reports distinguish local byte equality from physical-drive independence; cloud coverage remains **NOT VERIFIED**. Windows runtime and real USB recovery checks for replication remain outstanding. Duplicate and dark-photo candidates are suggestions for review, never deletion decisions.
 
 ## Getting started
 
@@ -72,14 +73,17 @@ Windows users, including Windows Home users, can use the [setup and test scripts
 | `status` | Show recorded scan and analysis status. |
 | `report` | Show saved findings and review candidates. |
 | `export-manifest` | Export inventory records to a JSON Lines file. |
+| `replicate` | Copy raw files without overwriting conflicts, then independently verify both roots. |
+| `verify --deep` | Rehash both roots against the frozen replica binding. |
 
-Use `--help` for command options, `--json` for compact machine-readable output, and `--dry-run` to preview operations without scanning media. `index --deep` bypasses the hash cache. It still does not verify independent backups.
+Use `--help` for command options, `--json` for compact machine-readable output, and `--dry-run` to preview operations without writes. Replication previews read and hash media to check conflicts and capacity. `index --deep` bypasses the hash cache. It still does not verify independent backups.
 
 Keep application state and generated output outside archive roots. See the [CLI reference](docs/CLI.md) for options, exit codes, state locations, and platform-specific examples.
 
 ## Documentation
 
 - [Local workflows](docs/workflows.md)
+- [Replication, verification, and recovery](docs/replication.md)
 - [Safety and current limits](docs/safety.md)
 - [Architecture](docs/architecture.md)
 - [Development tooling and checks](docs/development.md)

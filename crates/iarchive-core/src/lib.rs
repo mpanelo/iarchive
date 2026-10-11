@@ -37,7 +37,7 @@ pub fn classify(path: &Path) -> FileKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileFact {
     pub relative_path: String,
     pub path_key: String,

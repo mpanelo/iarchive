@@ -345,7 +345,9 @@ name = "iarchive-fs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fs2",
  "iarchive-core",
+ "serde",
  "sha2",
  "tempfile",
  "walkdir",

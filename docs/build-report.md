@@ -1,5 +1,30 @@
 # Build and test report
 
+## Replication checks — 2026-10-11
+
+The new raw-copy and deep-verification commands were exercised on macOS using
+only synthetic files and temporary directories. All 33 Rust tests passed with
+the Python worker required, including interruption/retry, root replacement,
+capacity preflight, conflicts, changed source snapshots, incomplete publication,
+schema migration and recovery from either drive's standalone database backup.
+Formatting and workspace Clippy passed with warnings treated as errors.
+
+All 28 image-worker tests, three repository tests (including the offline cloud
+policy suite), and 62 offline cloud-probe tests passed. cargo-deny passed after
+refreshing the public advisory database; the existing duplicate `syn`/`winnow`
+warnings remain. Cargo.lock records the filesystem crate's added dependencies;
+SQLite's backup feature is enabled without changing its resolved version.
+
+The Windows filesystem crate and its test targets passed a cross-target compile
+and Clippy check. This is **not Windows runtime verification**. PowerShell smoke
+changes are prepared for both CI shells but have not run on this host. Windows
+runtime, physical USB disconnect/reconnect and a large-library benchmark remain
+outstanding. The [Windows two-drive acceptance plan](windows-two-drive-test.md)
+provides the next manual checks; it has not been executed on Windows. See
+[replication and recovery](replication.md) for command behavior and limits.
+
+## Earlier inventory and image-audit checks
+
 Date: 2026-10-10. Local host: macOS, Apple Silicon; Rust/Cargo 1.96.0, uv 0.12.3, Python 3.14.7. Development uses only synthetic media and temporary directories. No private archives or cloud accounts were accessed.
 
 ## Completed local checks
@@ -19,4 +44,4 @@ The [checks workflow](https://github.com/mpanelo/iarchive/actions/workflows/ci.y
 
 ## Remaining limits
 
-Synthetic checks do not prove behavior with real Windows external drives, distinct physical-device identity, a complete iCloud library, or a 200 GiB library. The declared Rust minimum version has not been independently tested. No cloud authentication, deletion, quarantine, replication, or verified-backup claim is available. Reports retain **NOT VERIFIED** for local replication and cloud coverage.
+Synthetic checks do not prove behavior with real Windows external drives, a complete iCloud library, or a 200 GiB library. The declared Rust minimum version has not been independently tested. The archive CLI has no cloud authentication, deletion or quarantine. Replica commands now distinguish independently checked local bytes from OS-reported physical independence and unverified cloud coverage; saved status does not reverify files.

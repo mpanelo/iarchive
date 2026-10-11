@@ -267,6 +267,55 @@ function Test-ScriptGuards {
     Assert-Check (-not (Test-Path -LiteralPath (Join-Path $outside 'new'))) 'Guard test wrote through a junction.'
 }
 
+function Invoke-ReplicaSmoke {
+    param([string]$Exe, [string]$Media, [string]$MediaParent, [string]$State, [string]$Reports)
+    $secondary = New-FreshDirectory (Join-Path $MediaParent 'replica-media')
+    $primaryArtifacts = New-FreshDirectory (Join-Path $MediaParent 'replica-primary-artifacts')
+    $secondaryArtifacts = New-FreshDirectory (Join-Path $MediaParent 'replica-secondary-artifacts')
+    $arguments = @('--cycle', 'demo', '--secondary', $secondary,
+        '--primary-artifacts', $primaryArtifacts, '--secondary-artifacts', $secondaryArtifacts,
+        '--allow-unverified-devices')
+    # These two directories are deliberately on one volume: test byte preservation,
+    # never claim physically independent backups from this fixture.
+    $plan = Invoke-IarchiveJson $Exe $State $Reports 'replica-dry-run' (@('--dry-run', 'replicate') + $arguments)
+    Assert-Check (-not $plan.complete -and $plan.planned_files -gt 0) 'Replica dry-run reported completion or no planned files.'
+    Assert-Check (@(Get-ChildItem -LiteralPath $secondary -Force).Count -eq 0) 'Replica dry-run wrote media.'
+    $first = Invoke-IarchiveJson $Exe $State $Reports 'replicate' (@('replicate') + $arguments)
+    Assert-Check ($first.complete -and $first.copied_files -eq $plan.planned_files -and
+        $first.local_replica -eq 'LOCAL BYTES VERIFIED' -and
+        $first.independent_physical_drives -eq 'NOT VERIFIED') 'Synthetic byte replication or independence reporting is incorrect.'
+    $again = Invoke-IarchiveJson $Exe $State $Reports 'replicate-again' (@('replicate') + $arguments)
+    Assert-Check ($again.complete -and $again.copied_files -eq 0) 'Replica rerun recopied matching files.'
+    $verified = Invoke-IarchiveJson $Exe $State $Reports 'verify-deep' (@('verify', '--deep') + $arguments)
+    Assert-Check ($verified.complete -and $verified.verified_files -eq $plan.planned_files) 'Deep verification did not read every file.'
+    $sourceFiles = @(Get-SyntheticSnapshot $Media)
+    $replicaFiles = @(Get-SyntheticSnapshot $secondary)
+    Assert-Check ((ConvertTo-Json -InputObject $sourceFiles -Depth 5 -Compress) -eq
+        (ConvertTo-Json -InputObject $replicaFiles -Depth 5 -Compress)) 'Replica bytes or modification times differ.'
+    Assert-Check (@($verified.artifact_bundles).Count -eq 3) 'Verified artifacts were not saved in three locations.'
+    foreach ($bundle in $verified.artifact_bundles) {
+        # Rust canonical paths use verbatim prefixes; these short fixture paths
+        # also need to work through Windows PowerShell 5.1 filesystem providers.
+        $bundlePath = $bundle
+        if ($bundle.StartsWith('\\?\UNC\')) { $bundlePath = '\\' + $bundle.Substring(8) }
+        elseif ($bundle.StartsWith('\\?\')) { $bundlePath = $bundle.Substring(4) }
+        foreach ($name in @('manifest.jsonl', 'manifest.sqlite', 'summary.json')) {
+            Assert-Check (Test-Path -LiteralPath (Join-Path $bundlePath $name) -PathType Leaf) "Missing replica artifact: $name"
+        }
+        Assert-Check ((Get-FileHash -LiteralPath (Join-Path $bundlePath 'manifest.jsonl') -Algorithm SHA256).Hash.ToLowerInvariant() -eq
+            $verified.manifest_sha256) 'Replica manifest digest differs.'
+        Assert-Check ((Get-FileHash -LiteralPath (Join-Path $bundlePath 'manifest.sqlite') -Algorithm SHA256).Hash.ToLowerInvariant() -eq
+            $verified.database_backup_sha256) 'Replica database backup digest differs.'
+    }
+    $victim = Join-Path $secondary $sourceFiles[0].path
+    [IO.File]::WriteAllBytes($victim, [Text.Encoding]::ASCII.GetBytes('synthetic replica corruption'))
+    $bad = Invoke-IarchiveJson $Exe $State $Reports 'verify-corrupt' (@('verify', '--deep') + $arguments) 2
+    Assert-Check (-not $bad.complete -and $bad.hash_mismatches -gt 0) 'Corrupt replica retained verification.'
+    $saved = Invoke-IarchiveJson $Exe $State $Reports 'replica-status-incomplete' @('status', '--cycle', 'demo')
+    Assert-Check ($saved.replica_state -eq 'INCOMPLETE') 'Failed verification left saved completion valid.'
+    return [pscustomobject]@{ media = $secondary; reports = $Reports; passed = $true }
+}
+
 function Invoke-SyntheticSmoke {
     param([string]$Exe, [string]$MediaParent, [string]$Artifacts)
     $media = Join-Path $MediaParent 'media'
@@ -315,6 +364,9 @@ function Invoke-SyntheticSmoke {
     Assert-Check (-not (Test-Path -LiteralPath $unsafeExport)) 'Export wrote inside media.'
     Assert-UnchangedSnapshot $media $before
 
+    $replicaResult = Invoke-ReplicaSmoke $Exe $media $MediaParent $state $reports
+    Assert-UnchangedSnapshot $media $before
+
     # Only these generated fixtures are mutated to exercise incomplete reports.
     [IO.File]::WriteAllBytes((Join-Path $media 'corrupt.heic'), [Text.Encoding]::ASCII.GetBytes('synthetic invalid HEIC'))
     [IO.File]::WriteAllBytes((Join-Path $media 'copy.partial'), [Text.Encoding]::ASCII.GetBytes('synthetic partial copy'))
@@ -337,5 +389,5 @@ function Invoke-SyntheticSmoke {
     }
     Assert-UnchangedSnapshot $media $negativeBefore
     Write-JsonFile (Join-Path $reports 'source-after.json') @(Get-SyntheticSnapshot $media)
-    return [pscustomobject]@{ media = $media; reports = $reports; manifest = $manifest; passed = $true }
+    return [pscustomobject]@{ media = $media; reports = $reports; manifest = $manifest; replication = $replicaResult; passed = $true }
 }

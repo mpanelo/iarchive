@@ -1,4 +1,5 @@
 mod operations;
+mod replication;
 mod worker;
 
 use anyhow::{Context, Result, ensure};
@@ -17,7 +18,7 @@ use std::{
 #[command(
     name = "iarchive",
     version,
-    about = "Read-only local photo inventory and audit. Replication and cloud coverage are NOT VERIFIED."
+    about = "Local photo inventory, audit, replication and deep byte verification. Cloud coverage is NOT VERIFIED."
 )]
 struct Cli {
     #[arg(long, global = true)]
@@ -27,7 +28,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Describe planned work without writing state or scanning media"
+        help = "Preview without writes; replication previews read and hash media"
     )]
     dry_run: bool,
     #[command(subcommand)]
@@ -97,6 +98,15 @@ enum Commands {
     Report {
         #[arg(long)]
         cycle: String,
+    },
+    /// Copy a frozen raw file set without overwriting, then independently verify both roots.
+    Replicate(replication::Args),
+    /// Independently rehash both roots against the frozen replica binding; never copy media.
+    Verify {
+        #[command(flatten)]
+        args: replication::Args,
+        #[arg(long, required = true, help = "Required: bypass all cached hashes")]
+        deep: bool,
     },
 }
 
@@ -345,6 +355,7 @@ fn run(cli: &Cli) -> Result<bool> {
         | Commands::ExportManifest { cycle, .. }
         | Commands::Audit { cycle, .. }
         | Commands::Report { cycle } => cycle,
+        Commands::Replicate(args) | Commands::Verify { args, .. } => &args.cycle,
         _ => unreachable!(),
     };
     validate_cycle(cycle)?;
@@ -352,6 +363,26 @@ fn run(cli: &Cli) -> Result<bool> {
         state.join("manifest.sqlite").exists(),
         "no state database; import a synthetic archive first"
     );
+    if let Commands::Replicate(args) | Commands::Verify { args, .. } = &cli.command {
+        let _lock = if cli.dry_run {
+            None
+        } else {
+            Some(lock_state(&state)?)
+        };
+        let mut store = if cli.dry_run {
+            Store::open_readonly(&state.join("manifest.sqlite"))?
+        } else {
+            Store::open(&state.join("manifest.sqlite"))?
+        };
+        return replication::run(
+            cli,
+            &mut store,
+            &state,
+            args,
+            matches!(cli.command, Commands::Replicate(_)),
+            config.as_ref(),
+        );
+    }
     if cli.dry_run {
         let store = Store::open_readonly(&state.join("manifest.sqlite"))?;
         let root = store.root(cycle)?;

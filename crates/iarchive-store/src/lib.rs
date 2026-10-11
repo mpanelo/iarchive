@@ -9,6 +9,7 @@ pub struct Store {
 }
 pub type ExactMember = (i64, String, String);
 pub type ExactGroup = Vec<ExactMember>;
+const STORE_SCHEMA_VERSION: u32 = 2;
 
 fn nonnegative_integer(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(column)?;
@@ -31,6 +32,8 @@ pub struct CycleStatus {
     pub image_errors: u64,
     pub unsupported_visual_files: u64,
     pub local_replica: &'static str,
+    pub replica_state: Option<String>,
+    pub last_replica_run: Option<i64>,
     pub cloud_coverage: &'static str,
     pub cloud_asset_count: Option<u64>,
     pub status_note: &'static str,
@@ -42,7 +45,7 @@ impl Store {
             Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version == SCHEMA_VERSION,
+            (1..=STORE_SCHEMA_VERSION).contains(&version),
             "unsupported state database schema"
         );
         Ok(Self { connection })
@@ -52,7 +55,7 @@ impl Store {
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
         ensure!(
-            version <= SCHEMA_VERSION,
+            version <= STORE_SCHEMA_VERSION,
             "state database is newer than this executable"
         );
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -63,15 +66,33 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
+        if version < STORE_SCHEMA_VERSION {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("replica.sql"))?;
+            tx.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
+            tx.commit()?;
+        }
         Ok(Self { connection })
     }
 
     pub fn roots(&self) -> Result<Vec<PathBuf>> {
-        Ok(self
+        let mut roots = self
             .connection
             .prepare("SELECT source_root FROM archive_cycle")?
             .query_map([], |r| Ok(PathBuf::from(r.get::<_, String>(0)?)))?
-            .collect::<rusqlite::Result<_>>()?)
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let version: u32 = self
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version >= 2 {
+            roots.extend(
+                self.connection
+                    .prepare("SELECT secondary_root FROM replica_binding")?
+                    .query_map([], |row| Ok(PathBuf::from(row.get::<_, String>(0)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+        }
+        Ok(roots)
     }
 
     pub fn import(&mut self, cycle: &str, root: &Path) -> Result<()> {
@@ -196,6 +217,20 @@ impl Store {
             |r| nonnegative_integer(r, 0),
         )?;
         let (successes, failures) = self.connection.query_row("SELECT COUNT(a.features_json),COUNT(a.error) FROM analysis a JOIN file_item f ON f.id=a.file_id WHERE f.cycle_id=?1 AND f.present=1 AND a.sha256=f.sha256", [cycle], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?)))?;
+        let version: u32 = self
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let last: Option<(i64, String)> = if version >= 2 {
+            self.connection
+                .query_row(
+                    "SELECT id,state FROM replica_run WHERE cycle_id=?1 ORDER BY id DESC LIMIT 1",
+                    [cycle],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+        } else {
+            None
+        };
         Ok(CycleStatus {
             cycle: cycle.to_owned(),
             source_root: root,
@@ -211,6 +246,8 @@ impl Store {
             image_errors: failures,
             unsupported_visual_files: unsupported,
             local_replica: "NOT VERIFIED",
+            replica_state: last.as_ref().map(|(_, state)| state.clone()),
+            last_replica_run: last.map(|(id, _)| id),
             cloud_coverage: "NOT VERIFIED",
             cloud_asset_count: None,
             status_note: "Last recorded scan only; status does not rehash or prove current filesystem contents. Files are not iCloud assets.",
@@ -219,6 +256,10 @@ impl Store {
 
     pub fn begin_scan(&mut self, cycle: &str) -> Result<i64> {
         let tx = self.connection.transaction()?;
+        tx.execute(
+            "UPDATE replica_run SET state='STALE' WHERE cycle_id=?1 AND state='VERIFIED'",
+            [cycle],
+        )?;
         tx.execute(
             "UPDATE scan_run SET state='INTERRUPTED' WHERE cycle_id=?1 AND state='RUNNING'",
             [cycle],
@@ -377,11 +418,198 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+
+    pub fn replica_binding(&self, cycle: &str) -> Result<Option<String>> {
+        let version: u32 = self
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if version < 2 {
+            return Ok(None);
+        }
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT binding_json FROM replica_binding WHERE cycle_id=?1",
+                [cycle],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn bind_replica(&self, cycle: &str, secondary: &Path, json: &str) -> Result<()> {
+        if let Some(previous) = self.replica_binding(cycle)? {
+            ensure!(previous == json, "frozen replica binding changed");
+        } else {
+            self.connection.execute("INSERT INTO replica_binding(cycle_id,secondary_root,binding_json) VALUES(?1,?2,?3)",
+                params![cycle, secondary.to_str().context("secondary root is not Unicode")?, json])?;
+        }
+        Ok(())
+    }
+
+    pub fn begin_replica(&mut self, cycle: &str, operation: &str) -> Result<i64> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "UPDATE replica_run SET state='INTERRUPTED' WHERE cycle_id=?1 AND state IN ('RUNNING','PUBLISHING')",
+            [cycle],
+        )?;
+        tx.execute(
+            "UPDATE replica_run SET state='STALE' WHERE cycle_id=?1 AND state='VERIFIED'",
+            [cycle],
+        )?;
+        tx.execute(
+            "INSERT INTO replica_run(cycle_id,operation) VALUES(?1,?2)",
+            params![cycle, operation],
+        )?;
+        let run = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE archive_cycle SET stage=?2 WHERE id=?1",
+            params![
+                cycle,
+                if operation == "replicate" {
+                    "REPLICATING"
+                } else {
+                    "VERIFYING"
+                }
+            ],
+        )?;
+        tx.execute("INSERT INTO transition_log(cycle_id,stage,reason) VALUES(?1,'VERIFYING','Replica operation started; prior completion invalidated')", [cycle])?;
+        tx.commit()?;
+        Ok(run)
+    }
+
+    pub fn replica_progress(
+        &self,
+        run: i64,
+        file: &FileFact,
+        state: &str,
+        copied_bytes: u64,
+        partial: Option<&Path>,
+    ) -> Result<()> {
+        self.connection.execute("INSERT INTO replica_file(run_id,relative_path,state,byte_count,sha256,copied_bytes,partial_path) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(run_id,relative_path) DO UPDATE SET state=excluded.state,copied_bytes=excluded.copied_bytes,partial_path=excluded.partial_path",
+            params![run, file.relative_path, state, i64::try_from(file.byte_count)?, file.sha256,
+                i64::try_from(copied_bytes)?, partial.map(|path| path.to_str().context("partial path is not Unicode")).transpose()?])?;
+        Ok(())
+    }
+
+    pub fn finish_replica(
+        &mut self,
+        cycle: &str,
+        run: i64,
+        complete: bool,
+        summary: &str,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let state = if complete { "VERIFIED" } else { "INCOMPLETE" };
+        tx.execute("UPDATE replica_run SET state=?2,completed_at=CURRENT_TIMESTAMP,summary_json=?3 WHERE id=?1", params![run, state, summary])?;
+        tx.execute(
+            "UPDATE archive_cycle SET stage=?2 WHERE id=?1",
+            params![
+                cycle,
+                if complete {
+                    "VERIFIED"
+                } else {
+                    "REPLICA_INCOMPLETE"
+                }
+            ],
+        )?;
+        tx.execute("INSERT INTO transition_log(cycle_id,stage,reason) VALUES(?1,?2,'Uncached replica byte checks; physical independence and cloud coverage are separate')", params![cycle,state])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn begin_publication(&mut self, cycle: &str, run: i64, summary: &str) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "UPDATE replica_run SET state='PUBLISHING',summary_json=?2 WHERE id=?1",
+            params![run, summary],
+        )?;
+        tx.execute(
+            "UPDATE archive_cycle SET stage='PUBLISHING' WHERE id=?1",
+            [cycle],
+        )?;
+        tx.execute("INSERT INTO transition_log(cycle_id,stage,reason) VALUES(?1,'PUBLISHING','Byte checks passed; backup bundle publication is not complete')", [cycle])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Snapshot the live WAL database through SQLite's backup API, never by copying its main file.
+    pub fn backup(&self, path: &Path) -> Result<()> {
+        let file = std::fs::File::create_new(path)?;
+        drop(file);
+        let mut destination = Connection::open(path)?;
+        let backup = rusqlite::backup::Backup::new(&self.connection, &mut destination)?;
+        backup.run_to_completion(64, std::time::Duration::from_millis(10), None)?;
+        drop(backup);
+        destination.close().map_err(|(_, error)| error)?;
+        std::fs::File::open(path)?.sync_all()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_state_migrates_without_losing_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        connection
+            .execute(
+                "INSERT INTO archive_cycle(id,source_root) VALUES('legacy','synthetic-root')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(
+            Store::open_readonly(&path)
+                .unwrap()
+                .status("legacy")
+                .unwrap()
+                .replica_state,
+            None
+        );
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.root("legacy").unwrap(),
+            PathBuf::from("synthetic-root")
+        );
+        let first = store.begin_replica("legacy", "replicate").unwrap();
+        assert_eq!(
+            store.status("legacy").unwrap().replica_state.as_deref(),
+            Some("RUNNING")
+        );
+        store
+            .begin_publication("legacy", first, "{\"complete\":false}")
+            .unwrap();
+        drop(store);
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.status("legacy").unwrap().replica_state.as_deref(),
+            Some("PUBLISHING")
+        );
+        let second = store.begin_replica("legacy", "replicate").unwrap();
+        assert!(second > first);
+        let interrupted: String = store
+            .connection
+            .query_row(
+                "SELECT state FROM replica_run WHERE id=?1",
+                [first],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(interrupted, "INTERRUPTED");
+        store.finish_replica("legacy", second, false, "{}").unwrap();
+        assert_eq!(
+            store.status("legacy").unwrap().replica_state.as_deref(),
+            Some("INCOMPLETE")
+        );
+    }
 
     #[test]
     fn byte_counts_are_checked() {

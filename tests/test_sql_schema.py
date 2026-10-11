@@ -12,6 +12,7 @@ class SchemaTests(unittest.TestCase):
         self.db = sqlite3.connect(":memory:")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript((ROOT / "crates/iarchive-store/src/schema.sql").read_text())
+        self.db.executescript((ROOT / "crates/iarchive-store/src/replica.sql").read_text())
 
     def tearDown(self):
         self.db.close()

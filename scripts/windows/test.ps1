@@ -80,7 +80,7 @@ try {
         smoke_tests = $results
     })
     Write-Host "PASS. Results: $runRoot\summary.json"
-    Write-Host 'Synthetic files are retained. No archive replication or cloud coverage was verified.'
+    Write-Host 'Synthetic copies were byte-verified. Physical backup independence and cloud coverage remain unverified.'
 } catch {
     if ($runRoot) {
         Write-JsonFile (Join-Path $runRoot 'summary.json') ([pscustomobject]@{

@@ -9,6 +9,9 @@ use std::{
     path::Path,
 };
 
+pub mod replica;
+pub mod volume;
+
 pub struct LocalStorage;
 
 impl StorageProvider for LocalStorage {

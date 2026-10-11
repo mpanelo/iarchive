@@ -12,11 +12,11 @@ The executable is `iarchive`. Read local planning instructions before changing s
 ## Safety invariants
 
 - Inventory and image review are read-only on media. Never read private archives during development; use synthetic fixtures and temporary directories.
-- No cloud authentication, deletion, local purge, quarantine, replication, or telemetry in this phase. Do not invoke destructive icloudpd flags.
+- No cloud authentication, deletion, local purge, quarantine, or telemetry in the archive CLI. Individually approved cloud research remains separate. Do not invoke destructive icloudpd flags.
 - Unknown, unreadable, partial, missing, or undecodable files are explicit findings, never deletion candidates. Preserve every file variant as a separate inventory entry. Pair confidence remains unknown until metadata proves a relationship.
-- Local inventory and hashes do not prove replication, independent physical drives, completed iPhone upload, or cloud coverage. Reports must say NOT VERIFIED.
+- A single-root inventory does not prove replication. Deep replica checks report local byte equality separately from physical-drive independence, completed iPhone upload, and cloud coverage. Unknown guarantees remain NOT VERIFIED.
 - State, manifests, and thumbnails stay outside archive roots. Never follow symlinks or Windows reparse points. Reject path traversal and unsafe output destinations.
-- Scan cache is an optimization, never evidence for a future deletion gate. Future verification must independently hash both drives.
+- Scan cache is an optimization, never evidence for a future deletion gate. Replica verification must independently hash both roots without cached hashes. Never overwrite conflicting destination files or prune extra files; interrupted partials remain outside media and never count as verified.
 - Interrupted scans must retain per-file progress and invalidate completion; errors must not disappear behind successful counts.
 
 ## Commit messages
@@ -77,4 +77,4 @@ CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows
 
 Windows scripts keep project tools and temporary files in the checkout's `.windows-sandbox` directory and use process-only environment settings. Setup detects compatible prerequisites and installs missing ones through WinGet by default; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` in preconfigured CI to check dependencies without running installers. Exercise discovery and simulated installation tests under PowerShell 7 and Windows PowerShell 5.1; never run real system installers during development on a user machine. Directory scoping is not OS isolation. External-drive tests require explicit drive arguments and use only fresh synthetic runs beneath a marked `iarchive-sandbox` directory. See [Windows setup and testing](docs/windows-testing.md).
 
-See docs/CLI.md for a synthetic smoke test and docs/safety.md for scope limits.
+See docs/CLI.md for a synthetic smoke test, docs/replication.md for copy/verify workflows, and docs/safety.md for scope limits.
