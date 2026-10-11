@@ -71,7 +71,7 @@ For automated setup, quality checks, synthetic smoke tests, and optional externa
 .\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
 ```
 
-Omit `-ExternalDrives` for local tests only. Use a dedicated checkout such as `C:\iarchive-sandbox\iarchive`; tools and caches stay inside it. Setup requires existing prerequisites and does not install system tools. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
+Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup requires existing prerequisites and does not install system tools. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
 
 Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI; real external-drive workflows still need separate runtime checks.
 
