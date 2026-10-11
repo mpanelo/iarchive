@@ -71,16 +71,14 @@ try {
         checkout = $repoRoot
         powershell = $PSVersionTable.PSVersion.ToString()
         smoke_tests = $results
-        physical_drive_identity = 'NOT VERIFIED'
-        local_replica = 'NOT VERIFIED'
-        cloud_coverage = 'NOT VERIFIED'
     })
     Write-Host "PASS. Results: $runRoot\summary.json"
     Write-Host 'Synthetic files are retained. No archive replication or cloud coverage was verified.'
 } catch {
     if ($runRoot) {
         Write-JsonFile (Join-Path $runRoot 'summary.json') ([pscustomobject]@{
-            passed = $false; error = $_.Exception.Message; local_replica = 'NOT VERIFIED'; cloud_coverage = 'NOT VERIFIED'
+            passed = $false
+            error = $_.Exception.Message
         })
     }
     Write-Error $_.Exception.Message -ErrorAction Continue
