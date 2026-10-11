@@ -1,7 +1,9 @@
 """Frozen download selection and independently hashed copies; synthetic bytes only."""
 
 import copy
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import socket
@@ -12,9 +14,10 @@ import unittest
 from unittest.mock import patch
 
 from album import collect_album
-from originals import (DownloadBlocked, hash_file, run_downloads, select_originals,
-                       stream_original, valid_media_url)
+from originals import (DownloadBlocked, VARIANT_COUNTS, hash_file, run_downloads,
+                       select_originals, select_variants, stream_resource, valid_media_url)
 from probe import PIN, ProbeBlocked, read_baseline, request_guard, save_new
+import probe
 import test_album as fixtures
 from test_album import ALBUM, NAME, ROOT, ZONE, album_record, pass_responses
 
@@ -31,10 +34,31 @@ def inventory():
         if "masterRef" in record["fields"]:
             record["fields"]["masterRef"]["value"]["recordName"] = "full-master-2"
     one[1]["records"] += two_pair
+    for record in one[1]["records"]:
+        if record["recordType"] == "CPLMaster":
+            record["fields"]["resOriginalFileType"] = {"value": "public.heic"}
     responses += copy.deepcopy(one) + copy.deepcopy(one)
     private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,
                                {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {})
-    urls = {("CPLMaster", f"full-master-{number}"): url for number, url in enumerate(URLS, 1)}
+    urls = {("CPLMaster", f"full-master-{number}", "resOriginalRes"): url for number, url in enumerate(URLS, 1)}
+    return private, urls
+
+
+def variant_inventory():
+    from test_resources import add_resource, variant_records
+    records, _ = variant_records()
+    # Preserve a preview ownership finding while selecting other exact fields.
+    add_resource(records[1], "resJPEGThumb", "public.jpeg")
+    for number, record in enumerate(records):
+        for field, entry in record["fields"].items():
+            if field.endswith("Res"):
+                entry["value"]["downloadURL"] = f"https://cvws.icloud-content.com/fixture-{number}-{field}"
+    one = [fixtures.count_response(4), {"records": records}, {"records": []}, fixtures.count_response(4)]
+    responses = [{"records": [album_record()]}] + copy.deepcopy(one) + copy.deepcopy(one)
+    urls = {}
+    private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,
+                               {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {},
+                               resource_urls=urls, download_fields=tuple(VARIANT_COUNTS), expected_count=4)
     return private, urls
 
 
@@ -86,19 +110,154 @@ class OriginalTests(unittest.TestCase):
         self.assertEqual(first["provider_checksum_opaque"], "opaque-checksum")
         self.assertNotIn("SECRET", json.dumps(first))
 
+    def test_variant_selection_preserves_bindings(self):
+        private, urls = variant_inventory()
+        plans = select_variants(private, private, urls, "synthetic-account")
+        self.assertEqual(len(plans), 6)
+        self.assertEqual(len(urls), 6)
+        owners = {(r['recordType'], r['recordName']): r for r in
+                  (*private['passes'][-1]['assets'], *private['passes'][-1]['masters'])}
+        for plan in plans:
+            binding = plan['binding']
+            owner = owners[(binding['resource_record_type'], binding['resource_record_id'])]
+            field = binding['resource_field']
+            self.assertEqual(plan['url'], urls[(owner['recordType'], owner['recordName'], field)])
+            self.assertEqual(binding['resource_record_change_tag'], owner['recordChangeTag'])
+            self.assertEqual(binding['resource_file_type'], owner['fields'][field.removesuffix('Res') + 'FileType'])
+            self.assertEqual(binding['resource_size'], owner['fields'][field]['size'])
+            self.assertEqual(binding['provider_checksum_opaque'], owner['fields'][field]['fileChecksum'])
+        self.assertEqual(private['resource_report']['summary']['resource_finding_counts'],
+                         {'ambiguous_resource_ownership': 1})
+
+    def test_variant_scope_rejects_changes(self):
+        private, urls = variant_inventory()
+        for field in ('resOriginalVidComplRes', 'resJPEGFullRes'):
+            for duplicate in (False, True):
+                value = copy.deepcopy(private)
+                now = value['passes'][-1]
+                owner = next(r for r in (*now['assets'], *now['masters']) if field in r['fields'])
+                if duplicate:
+                    other = (next(r for r in now['assets'] if r['fields']['masterRef']['recordName'] == owner['recordName'])
+                             if owner['recordType'] == 'CPLMaster' else
+                             next(r for r in now['masters'] if r['recordName'] == owner['fields']['masterRef']['recordName']))
+                    other['fields'][field] = copy.deepcopy(owner['fields'][field])
+                else:
+                    del owner['fields'][field]
+                with self.subTest(field=field, duplicate=duplicate), self.assertRaisesRegex(
+                        DownloadBlocked, 'ownership|counts'):
+                    select_variants(value, value, urls, 'synthetic-account')
+        for size, message in ((32 * 1024 * 1024 + 1, 'Resource size'), (16 * 1024 * 1024, 'total test byte')):
+            value = copy.deepcopy(private)
+            for r in (*value['passes'][-1]['assets'], *value['passes'][-1]['masters']):
+                for field in VARIANT_COUNTS:
+                    if field in r['fields']:
+                        r['fields'][field]['size'] = size
+            with self.subTest(size=size), self.assertRaisesRegex(DownloadBlocked, message):
+                select_variants(value, value, urls, 'synthetic-account')
+
+    def test_variant_download_round_trip(self):
+        from requests import Response as HttpResponse, Session
+        from requests.adapters import HTTPAdapter
+
+        private, urls = variant_inventory()
+        baseline = self.run / '.smoke/cloud-probe-baseline'
+        (baseline / 'cookies').mkdir(parents=True)
+        save_new(baseline / 'summary.json', {'schema': 1, 'authenticated': True, 'provider_version': PIN,
+                 'scope': 'album', 'album_metadata_completed': True, 'two_passes_match': True, 'observed_assets': 4})
+        save_new(baseline / 'album-private.json', private)
+        with self.assertRaisesRegex(ProbeBlocked, 'required asset count'):
+            read_baseline(self.run, baseline.name)
+        self.assertEqual(read_baseline(self.run, baseline.name, 4), private)
+        raw_records = []
+        for record in (*private['passes'][-1]['assets'], *private['passes'][-1]['masters']):
+            raw = {key: record[key] for key in ('recordType', 'recordName', 'recordChangeTag')}
+            raw['fields'] = {field: {'value': copy.deepcopy(value)} for field, value in record['fields'].items()}
+            for field in VARIANT_COUNTS:
+                key = (record['recordType'], record['recordName'], field)
+                if key in urls:
+                    raw['fields'][field]['value']['downloadURL'] = urls[key]
+            # Unselected previews still advertise URLs in both observations.
+            for field, entry in raw['fields'].items():
+                if field.endswith('Res'):
+                    entry['value'].setdefault('downloadURL', 'https://cvws.icloud-content.com/unapproved-preview')
+            raw_records.append(raw)
+        one = [fixtures.count_response(4), {'records': raw_records}, {'records': []}, fixtures.count_response(4)]
+        for drift in (False, True):
+            with self.subTest(post_download_drift=drift), Session() as session:
+                final = copy.deepcopy(one)
+                if drift:
+                    final[1]['records'][0]['recordChangeTag'] = 'post-download-change'
+                service = fixtures.AlbumTests().service(
+                    [{'records': [album_record()]}] + copy.deepcopy(one) * 2 + final)
+                session.post = service.session.post
+                service.session = session
+                service.data = {'dsInfo': {'dsid': 'synthetic-account'}}
+                service.requires_2fa = service.requires_2sa = False
+                service._get_webservice_url = lambda name: ROOT
+                run = self.run / ('drift-run' if drift else 'complete-run')
+                run.mkdir()
+                output, calls = io.StringIO(), []
+
+                def send(adapter, request, **kwargs):
+                    calls.append(request.url)
+                    response = HttpResponse()
+                    response.status_code = 200
+                    response.headers['Content-Type'] = 'application/octet-stream'
+                    response.raw = io.BytesIO(b'fixture')
+                    response.request, response.url = request, request.url
+                    return response
+
+                modules = {'pyicloud_ipd': SimpleNamespace(PyiCloudService=lambda *args, **kwargs: service)}
+                with patch.dict(sys.modules, modules), patch.object(HTTPAdapter, 'send', send), \
+                        patch.object(sys, 'argv', ['probe.py', 'variants', '--album', NAME, '--baseline', baseline.name]), \
+                        patch('probe.version', return_value=PIN), \
+                        patch('probe.sys.stdin.isatty', return_value=True), \
+                        patch('probe.sys.stderr.isatty', return_value=True), \
+                        patch('builtins.input', return_value='DOWNLOAD SIX RESOURCES'), \
+                        patch('probe.getpass.getpass', return_value='fake@example.invalid'), \
+                        patch('probe.new_run', return_value=run), patch('probe.logging.disable'), \
+                        patch('probe.read_baseline', side_effect=lambda repo, name, count: read_baseline(self.run, name, count)), \
+                        patch('probe.discover_zones', return_value=({'private': [{'zone_id': ZONE, 'deleted': False}], 'shared': []}, [])), \
+                        redirect_stdout(output):
+                    self.assertEqual(probe.main(), int(drift))
+                summary = json.loads((run / 'summary.json').read_text())
+                self.assertEqual(set(calls), set(urls.values()))
+                self.assertEqual(len(calls), 6)
+                self.assertEqual(summary['request_counts']['original_download_requests'], 6)
+                self.assertEqual(summary['downloaded_resources'], 6)
+                self.assertEqual(summary['downloaded_resource_bytes'], 42)
+                self.assertEqual(summary['downloaded_originals'], 4)
+                self.assertEqual(summary['resource_download_completed'], not drift)
+                self.assertFalse(summary['original_download_completed'])
+                if drift:
+                    self.assertEqual(summary['finding'], 'Album metadata changed during the resource download test')
+                for secret in ('full-asset', 'full-master', 'synthetic-account', 'fake@example.invalid'):
+                    self.assertNotIn(secret, output.getvalue())
+
+    def test_normalized_urls_cannot_collide(self):
+        plans = self.plans()
+        plans[0]['url'] = 'https://cvws.icloud-content.com/fixture%7e'
+        plans[1]['url'] = 'https://cvws.icloud-content.com/fixture~'
+        with patch('pyicloud_ipd.services.photos.download_asset') as fetch, \
+                self.assertRaisesRegex(DownloadBlocked, 'collide after request normalization'):
+            run_downloads(None, plans, self.run, {}, save_new)
+        fetch.assert_not_called()
+
     def test_baseline_drift_blocks_selection(self):
-        variants = []
-        for mutation in (lambda value: value.update(album_id="different-album"),
+        mutations = (lambda value: value.update(album_id="different-album"),
                          lambda value: value.update(zone_id={"zoneName": "wrong"}),
                          lambda value: value["passes"][-1]["assets"][0].update(recordName="new-upload"),
+                         lambda value: value["passes"][-1]["assets"][0].update(recordChangeTag="changed"),
                          lambda value: value["passes"][-1]["masters"][0].update(recordChangeTag="changed"),
-                         lambda value: value["passes"][-1]["masters"][0]["fields"]["resOriginalRes"].update(size=8)):
-            current = copy.deepcopy(self.private)
-            mutation(current)
-            variants.append(current)
-        for current in variants:
-            with self.subTest(current=current), self.assertRaises(DownloadBlocked):
-                select_originals(self.private, current, self.urls, "synthetic-account")
+                         lambda value: value["passes"][-1]["masters"][0]["fields"]["resOriginalRes"].update(size=8))
+        for factory, select in ((inventory, select_originals), (variant_inventory, select_variants)):
+            private, urls = factory()
+            for number, mutation in enumerate(mutations):
+                current = copy.deepcopy(private)
+                mutation(current)
+                with self.subTest(scope=select.__name__, mutation=number), self.assertRaisesRegex(
+                        DownloadBlocked, 'Approved identities or resource metadata changed'):
+                    select(private, current, urls, "synthetic-account")
 
     def test_selection_requires_unambiguous_owners(self):
         for mutation in (lambda value: value["passes"][-1]["assets"].pop(),
@@ -117,10 +276,19 @@ class OriginalTests(unittest.TestCase):
                      {key: "https://evil.example/download" for key in self.urls}):
             with self.subTest(urls=urls), self.assertRaises(DownloadBlocked):
                 select_originals(self.private, self.private, urls, "synthetic-account")
-        value = copy.deepcopy(self.private)
-        value["passes"][-1]["masters"][0]["fields"]["resOriginalRes"]["size"] = 256 * 1024 * 1024 + 1
-        with self.assertRaises(DownloadBlocked):
-            select_originals(value, value, self.urls, "synthetic-account")
+        mutations = (
+            lambda fields: fields['resOriginalRes'].update(size=256 * 1024 * 1024 + 1),
+            lambda fields: fields['resOriginalRes'].update(size=0),
+            lambda fields: fields['resOriginalRes'].update(size=True),
+            lambda fields: fields['resOriginalRes'].update(fileChecksum=''),
+            lambda fields: fields.pop('resOriginalFileType'),
+        )
+        for number, mutation in enumerate(mutations):
+            value = copy.deepcopy(self.private)
+            mutation(value['passes'][-1]['masters'][0]['fields'])
+            with self.subTest(resource_mutation=number), self.assertRaisesRegex(
+                    DownloadBlocked, 'Resource size|type or opaque checksum'):
+                select_originals(value, value, self.urls, "synthetic-account")
 
     def test_media_url_validation(self):
         self.assertTrue(valid_media_url(URLS[0]))
@@ -172,7 +340,9 @@ class OriginalTests(unittest.TestCase):
         self.assertEqual(result["physical_drive_independence"], "NOT VERIFIED")
         self.assertEqual(result["provider_checksum_algorithm"], "NOT VERIFIED")
         expected = hashlib.sha256(b"fixture").hexdigest()
-        for path in self.run.glob("copy-*/*.bin"):
+        copies = list(self.run.glob("copy-*/*"))
+        self.assertEqual(len(copies), 4)
+        for path in copies:
             self.assertEqual(hash_file(path), (7, expected))
         for path in self.run.glob("*.json"):
             self.assertNotIn("SECRET_URL", path.read_text())
@@ -184,19 +354,19 @@ class OriginalTests(unittest.TestCase):
         for number, response in enumerate(responses):
             progress = []
             with self.subTest(number=number), self.assertRaises(DownloadBlocked):
-                stream_original(None, URLS[0], self.run / f"bad-{number}.bin", 7,
+                stream_resource(None, URLS[0], self.run / f"bad-{number}.bin", 7,
                                 lambda *args: response, progress.append)
             self.assertTrue(response.closed)
             self.assertFalse(progress[0]["download_complete"])
         good = Response(status=206, headers={"Content-Range": "bytes 0-6/7"})
-        self.assertEqual(stream_original(None, URLS[0], self.run / "range.bin", 7, lambda *args: good),
+        self.assertEqual(stream_resource(None, URLS[0], self.run / "range.bin", 7, lambda *args: good),
                          hashlib.sha256(b"fixture").hexdigest())
 
     def test_interrupted_download_retains_progress(self):
         response = Response([b"fix", KeyboardInterrupt()])
         with self.assertRaises(KeyboardInterrupt):
             run_downloads(None, self.plans(), self.run, {}, save_new, lambda *args: response)
-        self.assertEqual((self.run / "copy-a/original-01.bin").read_bytes(), b"fix")
+        self.assertEqual((self.run / "copy-a/resource-01.heic").read_bytes(), b"fix")
         progress = json.loads((self.run / "download-01-progress-private.json").read_text())
         self.assertEqual(progress["downloaded_bytes"], 3)
         self.assertFalse(progress["download_complete"])
@@ -216,7 +386,7 @@ class OriginalTests(unittest.TestCase):
         path = self.run / "existing.bin"
         path.write_bytes(b"existing")
         with self.assertRaises(FileExistsError):
-            stream_original(None, URLS[0], path, 7, lambda *args: Response())
+            stream_resource(None, URLS[0], path, 7, lambda *args: Response())
         self.assertEqual(path.read_bytes(), b"existing")
         try:
             (self.run / "linked.bin").symlink_to(path)
@@ -243,8 +413,8 @@ class OriginalTests(unittest.TestCase):
         urls = {}
         private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,
                                    {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {},
-                                   original_urls=urls)
-        self.assertEqual(urls, {("CPLMaster", "full-master-1"): "https://SECRET_SIGNED_URL"})
+                                   resource_urls=urls)
+        self.assertEqual(urls, {("CPLMaster", "full-master-1", "resOriginalRes"): "https://SECRET_SIGNED_URL"})
         self.assertNotIn("SECRET", json.dumps(private))
 
 

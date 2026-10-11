@@ -1,4 +1,4 @@
-"""Download only a frozen two-asset test set and verify two checkout-local copies."""
+"""Download frozen, narrowly selected test resources and verify two local copies."""
 
 import hashlib
 import os
@@ -12,6 +12,9 @@ from album import canonical
 
 
 MAX_ORIGINAL_BYTES = 256 * 1024 * 1024
+MAX_VARIANT_BYTES = 32 * 1024 * 1024
+MAX_VARIANT_TOTAL_BYTES = 64 * 1024 * 1024
+VARIANT_COUNTS = {"resOriginalRes": 4, "resOriginalVidComplRes": 1, "resJPEGFullRes": 1}
 CHUNK_SIZE = 1024 * 1024
 DOWNLOAD_SECONDS = 180
 
@@ -40,14 +43,25 @@ def valid_media_url(url):
 
 
 def select_originals(baseline, current, urls, account_id):
+    return select_resources(baseline, current, urls, account_id, 2,
+                            {"resOriginalRes": 2}, MAX_ORIGINAL_BYTES)
+
+
+def select_variants(baseline, current, urls, account_id):
+    return select_resources(baseline, current, urls, account_id, 4,
+                            VARIANT_COUNTS, MAX_VARIANT_BYTES, MAX_VARIANT_TOTAL_BYTES)
+
+
+def select_resources(baseline, current, urls, account_id, asset_count, field_counts,
+                     max_bytes, max_total=None):
     if not isinstance(account_id, str) or not account_id:
         raise DownloadBlocked("Authenticated account identity is missing")
     if (baseline["zone_id"] != current["zone_id"] or baseline["album_id"] != current["album_id"]
             or canonical(snapshot(baseline["passes"][-1])) != canonical(snapshot(current["passes"][-1]))):
         raise DownloadBlocked("Approved identities or resource metadata changed since the baseline")
     now = current["passes"][-1]
-    if len(now["assets"]) != 2 or len(now["masters"]) != 2:
-        raise DownloadBlocked("This experiment requires exactly the two approved assets and masters")
+    if len(now["assets"]) != asset_count or len(now["masters"]) != asset_count:
+        raise DownloadBlocked("Asset/master counts differ from the approved experiment")
     masters = {record["recordName"]: record for record in now["masters"]}
     plans = []
     seen_masters, seen_urls = set(), set()
@@ -57,27 +71,39 @@ def select_originals(baseline, current, urls, account_id):
             raise DownloadBlocked("Asset/master mapping is missing or ambiguous")
         seen_masters.add(master_id)
         master = masters[master_id]
-        candidates = [record for record in (asset, master) if "resOriginalRes" in record["fields"]]
-        if len(candidates) != 1:
-            raise DownloadBlocked("Original resource ownership is missing or ambiguous")
-        owner = candidates[0]
-        resource = owner["fields"]["resOriginalRes"]
-        size = resource.get("size")
-        if type(size) is not int or not 0 < size <= MAX_ORIGINAL_BYTES:
-            raise DownloadBlocked("Original size is invalid or exceeds the bounded test limit")
-        url = urls.get((owner["recordType"], owner["recordName"]))
-        if not valid_media_url(url) or url in seen_urls:
-            raise DownloadBlocked("An original resource URL is unavailable, unsafe or ambiguous")
-        seen_urls.add(url)
-        binding = {"account_id": account_id, "database": "private", "zone_id": current["zone_id"],
-                   "album_id": current["album_id"], "asset_id": asset["recordName"],
-                   "asset_change_tag": asset["recordChangeTag"], "master_id": master_id,
-                   "master_change_tag": master["recordChangeTag"],
-                   "resource_record_id": owner["recordName"], "resource_record_type": owner["recordType"],
-                   "resource_field": "resOriginalRes", "resource_size": size,
-                   "provider_checksum_opaque": resource["fileChecksum"],
-                   "resource_file_type": owner["fields"].get("resOriginalFileType")}
-        plans.append({"binding": binding, "url": url})
+        for field in field_counts:
+            candidates = [record for record in (asset, master) if field in record["fields"]]
+            if not candidates and field != "resOriginalRes":
+                continue
+            if len(candidates) != 1:
+                raise DownloadBlocked("Selected resource ownership is missing or ambiguous")
+            owner = candidates[0]
+            resource = owner["fields"][field]
+            size = resource.get("size")
+            if type(size) is not int or not 0 < size <= max_bytes:
+                raise DownloadBlocked("Resource size is invalid or exceeds the bounded test limit")
+            file_type = owner["fields"].get(field.removesuffix("Res") + "FileType")
+            checksum = resource.get("fileChecksum")
+            if not isinstance(file_type, str) or not file_type or not isinstance(checksum, str) or not checksum:
+                raise DownloadBlocked("Selected resource type or opaque checksum is missing")
+            url = urls.get((owner["recordType"], owner["recordName"], field))
+            if not valid_media_url(url) or url in seen_urls:
+                raise DownloadBlocked("A resource URL is unavailable, unsafe or ambiguous")
+            seen_urls.add(url)
+            binding = {"account_id": account_id, "database": "private", "zone_id": current["zone_id"],
+                       "album_id": current["album_id"], "asset_id": asset["recordName"],
+                       "asset_change_tag": asset["recordChangeTag"], "master_id": master_id,
+                       "master_change_tag": master["recordChangeTag"],
+                       "resource_record_id": owner["recordName"], "resource_record_type": owner["recordType"],
+                       "resource_record_change_tag": owner["recordChangeTag"],
+                       "resource_field": field, "resource_size": size,
+                       "provider_checksum_opaque": checksum, "resource_file_type": file_type}
+            plans.append({"binding": binding, "url": url})
+    counts = {field: sum(plan["binding"]["resource_field"] == field for plan in plans) for field in field_counts}
+    if counts != field_counts:
+        raise DownloadBlocked("Selected resource counts differ from the approved experiment")
+    if max_total is not None and sum(plan["binding"]["resource_size"] for plan in plans) > max_total:
+        raise DownloadBlocked("Selected resources exceed the total test byte limit")
     return plans
 
 
@@ -114,7 +140,7 @@ def hash_file(path):
     return count, digest.hexdigest()
 
 
-def stream_original(session, url, path, expected_size, fetch=None, progress=None):
+def stream_resource(session, url, path, expected_size, fetch=None, progress=None):
     if fetch is None:
         from pyicloud_ipd.services.photos import download_asset
         fetch = download_asset
@@ -123,30 +149,30 @@ def stream_original(session, url, path, expected_size, fetch=None, progress=None
     response = None
     try:
         # The pinned provider opens the streamed GET. The outer guard permits
-        # this exact original URL once, and blocks redirects to other URLs.
+        # this exact resource URL once, and blocks redirects to other URLs.
         response = fetch(session, url, 0)
         response.raise_for_status()
         if response.status_code not in (200, 206):
-            raise DownloadBlocked("Original download did not return a complete byte response")
+            raise DownloadBlocked("Resource download did not return a complete byte response")
         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
         if content_type in ("text/html", "application/json", "application/xml", "text/xml"):
-            raise DownloadBlocked("Original download returned a document rather than media bytes")
+            raise DownloadBlocked("Resource download returned a document rather than media bytes")
         if response.status_code == 206 and response.headers.get("Content-Range") != f"bytes 0-{expected_size - 1}/{expected_size}":
-            raise DownloadBlocked("Original download returned an incomplete or mismatched byte range")
+            raise DownloadBlocked("Resource download returned an incomplete or mismatched byte range")
         with open_new(path) as stream:
             try:
                 for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                     if time.monotonic() - started > DOWNLOAD_SECONDS:
-                        raise DownloadBlocked("Original download exceeded the bounded test duration")
+                        raise DownloadBlocked("Resource download exceeded the bounded test duration")
                     if not chunk:
                         continue
                     if count + len(chunk) > expected_size:
-                        raise DownloadBlocked("Original download exceeded its declared byte count")
+                        raise DownloadBlocked("Resource download exceeded its declared byte count")
                     stream.write(chunk)
                     count += len(chunk)
                     digest.update(chunk)
                 if count != expected_size:
-                    raise DownloadBlocked("Original download was shorter than its declared byte count")
+                    raise DownloadBlocked("Resource download was shorter than its declared byte count")
                 completed = True
             finally:
                 stream.flush()
@@ -173,18 +199,25 @@ def run_downloads(session, plans, run, transport, write_json, fetch=None):
     if fetch is None:
         from requests import Request
         # Match Requests' URL normalization without making any network call.
-        transport["approved_download_urls"] = {Request("GET", plan["url"]).prepare().url for plan in plans}
+        normalized = [Request("GET", plan["url"]).prepare().url for plan in plans]
     else:
-        transport["approved_download_urls"] = {plan["url"] for plan in plans}
+        normalized = [plan["url"] for plan in plans]
+    if len(set(normalized)) != len(plans):
+        raise DownloadBlocked("Selected URLs collide after request normalization")
+    transport["approved_download_urls"] = set(normalized)
     results = []
     for number, plan in enumerate(plans, 1):
-        source, copy = first / f"original-{number:02d}.bin", second / f"original-{number:02d}.bin"
+        extension = {"public.heic": "heic", "public.heif": "heif", "public.jpeg": "jpg",
+                     "com.apple.quicktime-movie": "mov", "public.mpeg-4": "mp4"}.get(
+                         plan["binding"]["resource_file_type"], "bin")
+        filename = f"resource-{number:02d}.{extension}"
+        source, copy = first / filename, second / filename
         result = {**plan["binding"], "copy_a": source.relative_to(run).as_posix(),
                   "copy_b": copy.relative_to(run).as_posix(), "copy_verified": False}
         def progress(value):
             result.update(value)
             write_json(run / f"download-{number:02d}-progress-private.json", result)
-        response_hash = stream_original(session, plan["url"], source, plan["binding"]["resource_size"],
+        response_hash = stream_resource(session, plan["url"], source, plan["binding"]["resource_size"],
                                         fetch, progress)
         with read_file(source) as source_stream, open_new(copy) as copy_stream:
             shutil.copyfileobj(source_stream, copy_stream, length=CHUNK_SIZE)
@@ -201,6 +234,10 @@ def run_downloads(session, plans, run, transport, write_json, fetch=None):
         results.append(result)
     write_json(run / "download-manifest-private.json", {"schema": 1, "complete": True, "resources": results,
                "complete_cloud_backup": "NOT VERIFIED", "physical_drive_independence": "NOT VERIFIED"})
-    return {"downloaded_originals": len(results), "downloaded_original_bytes": total,
+    originals = [item for item in results if item["resource_field"] == "resOriginalRes"]
+    return {"downloaded_resources": len(results), "downloaded_resource_bytes": total,
+            "downloaded_originals": len(originals),
+            "downloaded_original_bytes": sum(item["resource_size"] for item in originals),
+            "resource_byte_binding": "VERIFIED FOR TEST SET",
             "independent_local_hashes_match": True, "original_byte_binding": "VERIFIED FOR TEST SET",
             "physical_drive_independence": "NOT VERIFIED", "provider_checksum_algorithm": "NOT VERIFIED"}

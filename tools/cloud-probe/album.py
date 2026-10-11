@@ -194,8 +194,11 @@ def safe_record(record):
     return result
 
 
-def collect_pass(service, root, zone, album_id, progress=None, original_urls=None):
+def collect_pass(service, root, zone, album_id, progress=None, resource_urls=None,
+                 download_fields=("resOriginalRes",), expected_count=None):
     before = album_count(service, root, zone, album_id)
+    if expected_count is not None and before != expected_count:
+        raise AlbumBlocked("Album count differs from the approved download experiment")
     assets, masters, relations, pages, rank = {}, {}, {}, [], 0
     while True:
         value = read_query(service, root, list_body(zone, album_id, rank))
@@ -213,12 +216,13 @@ def collect_pass(service, root, zone, album_id, progress=None, original_urls=Non
                       "sync_token_sha256": hashlib.sha256(str(value["syncToken"]).encode()).hexdigest()
                       if value.get("syncToken") else None})
         cleaned_records = [safe_record(record) for record in page_records]
-        if original_urls is not None:
+        if resource_urls is not None:
             for record in page_records:
                 if record["recordType"] in ("CPLAsset", "CPLMaster"):
-                    resource = record.get("fields", {}).get("resOriginalRes")
-                    if resource:
-                        original_urls[(record["recordType"], record["recordName"])] = resource["value"].get("downloadURL")
+                    for field in download_fields:
+                        resource = record.get("fields", {}).get(field)
+                        if resource:
+                            resource_urls[(record["recordType"], record["recordName"], field)] = resource["value"].get("downloadURL")
         if progress:
             progress(len(pages), {"complete": False, "page": pages[-1], "records": cleaned_records})
         if not page_masters:
@@ -246,7 +250,8 @@ def collect_pass(service, root, zone, album_id, progress=None, original_urls=Non
             "count_before": before, "count_after": after}
 
 
-def collect_album(service, root, zones, name, transport, progress=None, original_urls=None):
+def collect_album(service, root, zones, name, transport, progress=None, resource_urls=None,
+                  download_fields=("resOriginalRes",), expected_count=None):
     primary = [zone["zone_id"] for zone in zones.get("private", [])
                if zone["zone_id"].get("zoneName") == "PrimarySync" and not zone["deleted"]]
     if len(primary) != 1:
@@ -256,10 +261,11 @@ def collect_album(service, root, zones, name, transport, progress=None, original
     album_id = find_album(service, root, zone, name)
     transport["approved_album"] = album_id
     first = collect_pass(service, root, zone, album_id,
-                         (lambda page, value: progress(1, page, value)) if progress else None)
+                         (lambda page, value: progress(1, page, value)) if progress else None,
+                         expected_count=expected_count)
     second = collect_pass(service, root, zone, album_id,
                           (lambda page, value: progress(2, page, value)) if progress else None,
-                          original_urls)
+                          resource_urls, download_fields, expected_count)
     comparison = lambda result: canonical({key: result[key] for key in ("assets", "masters", "relations")})
     resource_counts = {}
     missing_urls = 0

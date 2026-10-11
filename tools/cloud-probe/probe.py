@@ -1,4 +1,4 @@
-"""Scoped cloud research: authentication, album metadata and two approved originals."""
+"""Scoped cloud research: metadata and explicitly bounded test-resource downloads."""
 
 from __future__ import annotations
 
@@ -154,12 +154,12 @@ def reuse_cookies(repo: Path, name: str) -> Path:
     return cookies
 
 
-def read_baseline(repo: Path, name: str) -> dict:
+def read_baseline(repo: Path, name: str, expected_assets: int = 2) -> dict:
     run = reuse_cookies(repo, name).parent
     summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
     if (summary.get("scope") != "album" or summary.get("album_metadata_completed") is not True
-            or summary.get("two_passes_match") is not True or summary.get("observed_assets") != 2):
-        raise ProbeBlocked("Baseline is not the completed two-asset metadata experiment")
+            or summary.get("two_passes_match") is not True or summary.get("observed_assets") != expected_assets):
+        raise ProbeBlocked("Baseline is not the completed metadata experiment with the required asset count")
     path = run / "album-private.json"
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
@@ -169,6 +169,8 @@ def read_baseline(repo: Path, name: str) -> dict:
     from album import canonical
     if len(value.get("passes", [])) != 2 or canonical(snapshot(value["passes"][0])) != canonical(snapshot(value["passes"][1])):
         raise ProbeBlocked("Baseline metadata passes are incomplete or inconsistent")
+    if any(len(p[key]) != expected_assets for p in value["passes"] for key in ("assets", "masters")):
+        raise ProbeBlocked("Baseline asset/master counts differ from the approved experiment")
     return value
 
 
@@ -219,27 +221,40 @@ def verify_second_factor(service) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scope", choices=("auth", "libraries", "album", "originals"))
+    parser.add_argument("scope", choices=("auth", "libraries", "album", "originals", "variants"))
     parser.add_argument("--album", help="Exact name of the explicitly approved test album")
     parser.add_argument("--reuse-session", help="Authenticated cloud-probe run basename under .smoke")
-    parser.add_argument("--baseline", help="Successful two-asset album metadata run under .smoke")
+    parser.add_argument("--baseline", help="Successful album metadata run under .smoke matching the download scope")
+    parser.add_argument("--expected-assets", type=int, choices=(2, 4),
+                        help="Require this album count before metadata enumeration (album scope only)")
     args = parser.parse_args()
-    if (args.scope in ("album", "originals")) != bool(args.album):
-        parser.error("--album is required only for album and originals scopes")
-    if (args.scope == "originals") != bool(args.baseline):
-        parser.error("--baseline is required only for the originals scope")
+    downloads = args.scope in ("originals", "variants")
+    expected_assets = args.expected_assets if args.scope == "album" else 4 if args.scope == "variants" else 2
+    if args.expected_assets is not None and args.scope != "album":
+        parser.error("--expected-assets is allowed only for the album scope")
+    if (args.scope in ("album", "originals", "variants")) != bool(args.album):
+        parser.error("--album is required only for album and download scopes")
+    if downloads != bool(args.baseline):
+        parser.error("--baseline is required only for download scopes")
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         print("Run this probe directly in your own interactive Terminal; credentials must stay local.")
         return 2
     if version("icloudpd") != PIN:
         print(f"This probe requires icloudpd {PIN}.")
         return 2
-    phrase = "DOWNLOAD TWO ORIGINALS" if args.scope == "originals" else "READ ONLY " + args.scope.upper()
-    if args.scope == "originals":
+    phrase = ("DOWNLOAD SIX RESOURCES" if args.scope == "variants" else
+              "DOWNLOAD TWO ORIGINALS" if args.scope == "originals" else "READ ONLY " + args.scope.upper())
+    if args.scope == "variants":
+        print(f"Scope: four originals, one motion companion and one full image from {args.album!r}.")
+        print("Exactly four baseline assets; six resources, 32 MiB each and 64 MiB total at most.")
+        print("Two local copies and independent hashes. No previews or Photos modifications/removal.")
+    elif args.scope == "originals":
         print(f"Scope: download only the two baseline originals from {args.album!r} into a fresh .smoke run.")
         print("Create a second local copy and independently hash both. No Photos modifications or removal.")
     elif args.scope == "album":
         print(f"Scope: metadata only for the approved album {args.album!r}, at most 1000 assets.")
+        if expected_assets is not None:
+            print(f"Require exactly {expected_assets} assets before enumerating their metadata.")
         print("Album-name discovery and two metadata passes. No media downloads or removal.")
     else:
         print(f"Scope: {args.scope}. No albums, photo records, media downloads, or removal requests.")
@@ -259,6 +274,7 @@ def main() -> int:
               "library_discovery_completed": False,
               "album_metadata_completed": False,
               "original_download_completed": False,
+              "resource_download_completed": False,
               "cloud_coverage": "NOT VERIFIED", "removal_feasibility": "NOT VERIFIED",
               "photo_inventory_requested": False, "media_download_requested": False}
     try:
@@ -266,8 +282,8 @@ def main() -> int:
         run = new_run(repo)
         print(f"Private output directory: {run}")
         cookies = reuse_cookies(repo, args.reuse_session) if args.reuse_session else run / "cookies"
-        baseline = read_baseline(repo, args.baseline) if args.baseline else None
-        with request_guard(args.scope != "auth", args.scope in ("album", "originals"), args.scope == "originals") as transport:
+        baseline = read_baseline(repo, args.baseline, expected_assets) if args.baseline else None
+        with request_guard(args.scope != "auth", args.scope in ("album", "originals", "variants"), downloads) as transport:
             report["phase"] = "authentication"
             account = getpass.getpass("Apple account email (hidden, local only): ").strip()
             if not account:
@@ -299,7 +315,7 @@ def main() -> int:
                     key: [bool(zone["zone_id"].get("ownerRecordName")) for zone in value]
                     for key, value in zones.items()
                 }
-            if args.scope in ("album", "originals"):
+            if args.scope in ("album", "originals", "variants"):
                 from album import collect_album
                 if not report["library_discovery_completed"]:
                     raise ProbeBlocked("Library discovery was incomplete")
@@ -307,8 +323,12 @@ def main() -> int:
                 report["photo_inventory_requested"] = True
                 def progress(pass_number, page_number, value):
                     save_new(run / f"album-pass-{pass_number}-page-{page_number}.json", value)
-                original_urls = {} if args.scope == "originals" else None
-                private, album_report = collect_album(service, photo_root, zones, args.album, transport, progress, original_urls)
+                from originals import VARIANT_COUNTS
+                resource_urls = {} if downloads else None
+                download_fields = tuple(VARIANT_COUNTS) if args.scope == "variants" else ("resOriginalRes",)
+                private, album_report = collect_album(service, photo_root, zones, args.album, transport, progress,
+                                                      resource_urls, download_fields,
+                                                      expected_assets)
                 save_new(run / "album-private.json", private)
                 report.update(album_report)
                 save_new(run / "resource-report-private.json", {
@@ -318,23 +338,26 @@ def main() -> int:
                 if not report["two_passes_match"]:
                     raise ProbeBlocked("The two metadata passes differed")
                 report["album_metadata_completed"] = True
-            if args.scope == "originals":
-                from originals import run_downloads, select_originals, snapshot
+            if downloads:
+                from originals import run_downloads, select_originals, select_variants, snapshot
                 from album import canonical, collect_pass
                 identity = service.data["dsInfo"].get("dsid") or service.params.get("dsid")
                 identity = str(identity) if isinstance(identity, (str, int)) and not isinstance(identity, bool) else None
-                plans = select_originals(baseline, private, original_urls, identity)
-                report["phase"] = "original_download"
+                select = select_variants if args.scope == "variants" else select_originals
+                plans = select(baseline, private, resource_urls, identity)
+                report["phase"] = "resource_download"
                 report["media_download_requested"] = True
                 report.update(run_downloads(service.session, plans, run, transport, save_new))
                 report["phase"] = "post_download_metadata"
                 after = collect_pass(service, photo_root, private["zone_id"], private["album_id"],
-                                     lambda page, value: progress(3, page, value))
+                                     lambda page, value: progress(3, page, value),
+                                     expected_count=expected_assets)
                 save_new(run / "post-download-private.json", after)
                 if canonical(snapshot(after)) != canonical(snapshot(private["passes"][-1])):
-                    raise ProbeBlocked("Album metadata changed during the original download test")
+                    raise ProbeBlocked("Album metadata changed during the resource download test")
                 report["post_download_metadata_matches"] = True
-                report["original_download_completed"] = True
+                report["resource_download_completed"] = True
+                report["original_download_completed"] = args.scope == "originals"
             report["phase"] = "completed"
         report["completed_at"] = datetime.now(timezone.utc).isoformat()
     except (Exception, KeyboardInterrupt) as error:

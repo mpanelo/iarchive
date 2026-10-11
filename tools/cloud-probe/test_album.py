@@ -72,6 +72,12 @@ class AlbumTests(unittest.TestCase):
         self.assertEqual(find_album(service, ROOT, ZONE, NAME), ALBUM)
         self.assertEqual(set(service.calls[0]["desiredKeys"]), ALBUM_KEYS)
 
+    def test_download_count_blocks_asset_queries(self):
+        service = self.service([count_response(5)])
+        with self.assertRaisesRegex(AlbumBlocked, 'approved download experiment'):
+            collect_pass(service, ROOT, ZONE, ALBUM, expected_count=4)
+        self.assertEqual(len(service.calls), 1)
+
     def test_invalid_album_lists_are_rejected(self):
         invalid = [{"records": []}, {"records": [album_record(), album_record(identity="other")]},
                    {"records": [album_record()], "moreComing": True},

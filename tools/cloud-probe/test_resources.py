@@ -258,7 +258,7 @@ class ResourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
             run, output = Path(directory), io.StringIO()
             with patch.dict(sys.modules, modules), patch.object(sys, "argv", [
-                    "probe.py", "album", "--album", fixtures.NAME]), \
+                    "probe.py", "album", "--album", fixtures.NAME, "--expected-assets", "4"]), \
                     patch("probe.version", return_value=probe.PIN), \
                     patch("probe.sys.stdin.isatty", return_value=True), \
                     patch("probe.sys.stderr.isatty", return_value=True), \

@@ -1,7 +1,7 @@
 # Read-only cloud access probe
 
 This research helper is separate from the `iarchive` executable. It reuses pinned
-`icloudpd` authentication and streaming downloads, with four explicit scopes:
+`icloudpd` authentication and streaming downloads, with five explicit scopes:
 
 | Scope | Requests allowed |
 |---|---|
@@ -9,12 +9,14 @@ This research helper is separate from the `iarchive` executable. It reuses pinne
 | `libraries` | The same authentication plus private/shared library zone discovery |
 | `album` | Library discovery, album-name lookup, and metadata for one explicitly approved test album |
 | `originals` | The same metadata plus the exact two original-resource URLs from a completed test baseline |
+| `variants` | The same metadata plus four originals, one original motion companion and one full-image rendition from a four-asset baseline |
 
 The first two scopes cannot list albums or photo records. The album scope checks
 both endpoint and query body: asset queries must name the exact approved album
-and complete discovered zone identity. The originals scope permits each approved
-URL once; previews, other originals and redirects to unapproved URLs are blocked.
-No scope modifies Photos records. Unexpected endpoints stop the probe.
+and complete discovered zone identity. Download scopes permit each approved
+URL once; previews, other resources and redirects to unapproved URLs are blocked.
+No scope modifies Photos records. Unexpected endpoints stop the probe. Download
+scopes check the approved asset count before requesting asset metadata.
 This is a bounded access test, not a complete cloud inventory or a removal test.
 
 ## Run locally on macOS
@@ -70,6 +72,8 @@ Type `READ ONLY ALBUM` at the local prompt. The probe locates that exact album
 name and rejects absent, duplicate or incomplete matches. It makes two bounded
 metadata passes (at most 1,000 assets), checks membership counts before and after
 each pass, and compares full record identities, change tags and resource metadata.
+For a known two- or four-item fixture set, append `--expected-assets 2` or
+`--expected-assets 4` to stop before asset enumeration if its count differs.
 Album-membership relation records are preserved separately from assets and masters.
 It requests neither captions nor locations. Signed media URLs and wrapping keys
 are removed before output; only URL availability is recorded. Provider checksums
@@ -167,6 +171,40 @@ Physical backup independence requires separately verified drives. This is a
 bounded download/mapping test; it does not establish complete cloud backup or
 enable removal.
 
+## Six selected test resources
+
+This separately approved experiment requires a completed metadata-only baseline
+with exactly four assets and four masters. It selects exactly four
+`resOriginalRes` resources, one `resOriginalVidComplRes` and one `resJPEGFullRes`:
+
+```sh
+tools/cloud-probe/run-macos.command variants --album 'Synthetic test album' --baseline cloud-probe-example
+```
+
+Type `DOWNLOAD SIX RESOURCES` in your own Terminal. Session reuse works as above.
+Prepare its metadata baseline with `album --expected-assets 4` when the agreed
+scope is four items; inspect any drift before approving a replacement baseline.
+Each selected resource is limited to 32 MiB, with a 64 MiB total limit. The same
+180-second per-resource limit, streaming-response checks, single-use URL guard,
+two-copy hashing and post-download metadata comparison apply. Exact owner IDs
+and tags, resource fields, file types, lengths and opaque checksums are bound
+separately; signed URLs remain in memory. Missing or ambiguous selected owners,
+different resource counts, drift or URL normalization collisions stop the run.
+
+Previews, sidecars and alternate originals are outside this download selection.
+Their metadata remains in the observation, including findings. An ambiguity in
+an unselected preview does not merge its owners or authorize downloading it.
+Resources use generated `resource-NN` names with an extension selected from a
+fixed file-type mapping (or `.bin` for other types). The private manifest records
+each file's owner, field and declared type. Original bytes are not converted.
+
+Success requires `resource_download_completed` in `summary.json`, including the
+final metadata comparison. `original_download_completed` applies only to the
+older two-original scope. Independent hashes establish the selected response's
+association with two local copies. Playback, decoding, Live Photo content
+pairing and matching a rendition to the user's edit require further local
+content checks. This experiment does not establish complete archival coverage.
+
 ## Outputs and interpretation
 
 Each run creates a new ignored directory beneath `.smoke/cloud-probe-*`:
@@ -187,12 +225,13 @@ Each run creates a new ignored directory beneath `.smoke/cloud-probe-*`:
   `metadata_passes_match` records whether the two observations agreed. Keep local.
 - `album-pass-*-page-*.json`: sanitized page progress, retained even if interrupted.
   These partial pages are explicitly incomplete; use the summary to check completion.
-- `copy-a/` and `copy-b/`: the two downloaded originals and their local copies,
-  only for `originals`. These are private test media; never commit or upload them.
+- `copy-a/` and `copy-b/`: downloaded resources and their independently checked
+  local copies, only for `originals` or `variants`. These are private test media;
+  never commit or upload them.
 - `download-plan-private.json` and per-file progress/verification files: full
   account/database/zone/asset/master/resource bindings and local hash results.
 - `download-manifest-private.json`: completed local copy verification. Overall
-  success additionally requires `original_download_completed` in the summary,
+  success additionally requires `resource_download_completed` in the summary,
   which includes the post-download cloud metadata comparison.
 - `post-download-private.json`: sanitized metadata after the download test.
 
@@ -207,8 +246,8 @@ resource identity, checksum equivalence, stable snapshots, physical backups or
 safe removal. Those statuses remain `NOT VERIFIED`.
 
 Matching metadata passes do not prove an atomic snapshot or a complete resource
-inventory. The metadata scopes read no media bytes. The originals scope records
-byte associations for the two selected resources and checks local copies; broader
+inventory. The metadata scopes read no media bytes. The download scopes record
+byte associations for their selected resources and check local copies; broader
 resource/content mapping and independent physical backup verification remain open.
 Removal tests require their own explicit authorization. Do not use private archives
 as development fixtures.

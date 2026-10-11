@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from originals import run_downloads, select_originals
+from originals import run_downloads, select_originals, select_variants
 from probe import request_guard, save_new
-from test_originals import inventory
+from test_originals import inventory, variant_inventory
 
 
 class ProviderDownloadTests(unittest.TestCase):
@@ -19,13 +19,19 @@ class ProviderDownloadTests(unittest.TestCase):
         self.addCleanup(guard.stop)
 
     def test_prepared_download_matches_allowlist(self):
+        for factory, select in ((inventory, select_originals), (variant_inventory, select_variants)):
+            with self.subTest(scope=select.__name__):
+                self.prepared_download(factory, select)
+
+    def prepared_download(self, factory, select):
         from requests import Response, Session
         from requests.adapters import HTTPAdapter
 
-        private, urls = inventory()
-        urls[("CPLMaster", "full-master-1")] = (
+        private, urls = factory()
+        key = next(iter(urls))
+        urls[key] = (
             "https://cvws.icloud-content.com/synthetic%2fpath?token=fixture%7evalue")
-        plans = select_originals(private, private, urls, "synthetic-account")
+        plans = select(private, private, urls, "synthetic-account")
         calls, responses = [], []
 
         def send(adapter, request, **kwargs):
@@ -47,12 +53,11 @@ class ProviderDownloadTests(unittest.TestCase):
                 Session() as session, patch.object(HTTPAdapter, "send", send), \
                 request_guard(True, True, True) as transport:
             run_downloads(session, plans, Path(directory), transport, save_new)
-            self.assertEqual(transport["original_download_requests"], 2)
+            self.assertEqual(transport["original_download_requests"], len(plans))
             self.assertEqual(transport["approved_download_urls"], set())
-        self.assertEqual(calls, [
-            "https://cvws.icloud-content.com/synthetic%2Fpath?token=fixture~value",
-            urls[("CPLMaster", "full-master-2")],
-        ])
+        from requests import Request
+        self.assertEqual(calls, [Request('GET', p['url']).prepare().url for p in plans])
+        self.assertIn('https://cvws.icloud-content.com/synthetic%2Fpath?token=fixture~value', calls)
         for response in responses:
             response.close.assert_called_once()
 
