@@ -12,24 +12,24 @@ Use this dedicated layout:
 
 ```text
 C:\iarchive-sandbox\
-  repo\                       dedicated source checkout
+  iarchive\                   dedicated source checkout
     .windows-sandbox\         project Rust, Python, caches, temporary files
     image-worker\.venv\      project Python environment
     target\                   compiled binaries
     .smoke\windows-<id>\      synthetic media, state, previews, reports
 ```
 
-Open a **regular, non-administrator PowerShell** in `C:\iarchive-sandbox\repo`.
+Open a **regular, non-administrator PowerShell** in `C:\iarchive-sandbox\iarchive`.
 If creating that parent directory requires elevation on your system, use
-`$env:USERPROFILE\iarchive-sandbox\repo` instead. The scripts derive all local
+`$env:USERPROFILE\iarchive-sandbox\iarchive` instead. The scripts derive all local
 paths from their own checkout location; they also work when called from another
 working directory. Keep the checkout outside photo archives and synced folders.
 
 With Git already installed:
 
 ```powershell
-git clone https://github.com/mpanelo/iarchive.git C:\iarchive-sandbox\repo
-Set-Location C:\iarchive-sandbox\repo
+git clone https://github.com/mpanelo/iarchive.git C:\iarchive-sandbox\iarchive
+Set-Location C:\iarchive-sandbox\iarchive
 .\scripts\windows\setup.ps1
 .\scripts\windows\test.ps1
 ```
