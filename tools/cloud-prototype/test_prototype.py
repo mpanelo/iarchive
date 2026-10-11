@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -124,6 +125,44 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(Blocked):
             self.run_plan(plan)
         self.assertEqual(self.fixture.provider.calls, [])
+
+    def test_hash_accepts_stable_handle_timestamps_that_differ_from_path(self):
+        path = self.fixture.roots[0] / self.fixture.bindings[0].first
+        expected = hash_file(path)
+        original = os.fstat
+
+        def handle_stat(descriptor):
+            info = original(descriptor)
+            fields = ("st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            values = {field: getattr(info, field) for field in fields}
+            # Windows fstat can report change time while stat reports birth time.
+            values["st_ctime_ns"] += 100
+            return SimpleNamespace(**values)
+
+        with patch("prototype.os.fstat", side_effect=handle_stat):
+            self.assertEqual(hash_file(path), expected)
+
+    def test_hash_rejects_handle_changes_and_replaced_paths(self):
+        path = self.fixture.roots[0] / self.fixture.bindings[0].first
+        original = os.fstat
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        for changed_call in (2, 3):
+            for changed_field in fields:
+                calls = 0
+
+                def handle_stat(descriptor):
+                    nonlocal calls
+                    calls += 1
+                    info = original(descriptor)
+                    values = {field: getattr(info, field) for field in ("st_mode", *fields)}
+                    if calls == changed_call:
+                        values[changed_field] += 1
+                    return SimpleNamespace(**values)
+
+                with self.subTest(call=changed_call, field=changed_field):
+                    with patch("prototype.os.fstat", side_effect=handle_stat):
+                        with self.assertRaises(Blocked):
+                            hash_file(path)
 
     def test_missing_replica_is_a_finding(self):
         path = self.fixture.roots[1] / self.fixture.bindings[0].second

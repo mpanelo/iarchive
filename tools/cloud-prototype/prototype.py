@@ -103,7 +103,8 @@ def media_path(root: Path, relative: str) -> Path:
 def hash_file(path: Path) -> tuple[int, str]:
     """Always read bytes anew. Metadata alone never satisfies verification."""
     safe_path(path)
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
     with os.fdopen(descriptor, "rb") as stream:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode):
@@ -112,10 +113,14 @@ def hash_file(path: Path) -> tuple[int, str]:
         while chunk := stream.read(1024 * 1024):
             hasher.update(chunk)
         after = os.fstat(stream.fileno())
-    current = safe_path(path).stat()
-    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-    if any(getattr(before, f) != getattr(item, f) for item in (after, current) for f in fields):
-        raise Blocked(f"File changed while hashing: {path}")
+        # Windows stat(path) and fstat(fd) can give ctime different meanings.
+        # Reopen the guarded path and use fstat for every comparison, retaining
+        # the original handle until its identity and timestamps are checked.
+        with os.fdopen(os.open(safe_path(path), flags), "rb") as current_stream:
+            current = os.fstat(current_stream.fileno())
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, f) != getattr(item, f) for item in (after, current) for f in fields):
+            raise Blocked(f"File changed while hashing: {path}")
     return after.st_size, hasher.hexdigest()
 
 
