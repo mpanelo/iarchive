@@ -1,15 +1,37 @@
-# Safety contract
+# Safety
 
-Source media is read-only. Replication writes only to an explicitly selected secondary directory and never overwrites conflicts or prunes extra entries. App state and thumbnails must be outside media roots, and exports must use a new filename outside media/app state. The app never reorganizes an existing archive. Unknown extensions are retained in inventory; unreadable files, temporary files, links, and collisions are findings. A corrupted decode produces no pHash, brightness, or dark candidate.
+- Source media stays unchanged. Replication writes only to the selected replica
+  and never overwrites conflicts or removes extras.
+- Keep state, previews, exports and bundles outside media. Linked paths, traversal
+  and unsafe output destinations are refused.
+- Unknown, unreadable, partial, missing or undecodable files remain findings.
+  Each file variant stays separate; names alone do not prove relationships.
+- Review decisions are notes, never permission to move or remove files.
+- Cloud authentication/downloads, quarantine, restore and deletion are unavailable
+  in the CLI. There is no telemetry or media upload.
 
-The archive CLI has no cloud download/auth implementation, cloud removal, quarantine, media restore, or permanent purge. Raw replication and independent local byte verification are available; see [replication and recovery](replication.md). Destructive commands fail at CLI parsing. The optional review server binds only to `127.0.0.1` and serves saved thumbnails by allowlisted IDs. It records review notes in SQLite without touching media. There is no telemetry, photo upload, or cloud-delete provider method. Installing dependencies can use package registries; inventory and image audit themselves use local processes and files.
+## What verification means
 
-Inventory, status and image-review reports keep `local_replica` at **NOT VERIFIED**. A completed deep replica operation reports **LOCAL BYTES VERIFIED** for that local snapshot, with physical-drive independence reported separately. Cloud coverage remains **NOT VERIFIED**, and `cloud_asset_count` is null. Inventory counts are file counts. Byte hashes, visual similarity, and a successful decoder do not prove a complete iCloud library or safe removal. Neither filename stems nor truncated identifiers imply remote IDs or associated variants.
+Deep replica verification independently hashes both roots. Cached inventory,
+`status` and `report` do not prove current byte equality. New scans and replica
+operations invalidate saved completion.
 
-`status` and `report` describe saved work. The size/mtime scan cache is explicitly stale-capable. Images are rehashed around analysis, but even a deep index is only a single-root scan. Replica operations independently read both roots and bind their volume/root identities. Windows may report independent physical disks through conservative native queries; macOS does not establish physical independence. Same-volume or unknown backing requires an explicit byte-only acknowledgment. Saved completion is invalidated when another scan/replica operation starts and must never substitute for a fresh deep check. Nothing here can approve cloud removal.
+Local bytes, physical-drive independence and cloud coverage are separate results.
+Two copies on one disk are not independent backups. Nothing here proves completed
+iPhone uploads, complete iCloud coverage or offsite protection.
 
-Privacy errors from the decoder use safe categories rather than raw tracebacks or arbitrary exception strings. Local reports intentionally contain local filenames and paths; do not share them without inspecting/redacting them. No support export is implemented.
+## Browser and privacy
 
-Use synthetic fixtures for development. See [the build report](build-report.md) for completed checks and limits before using the app on an archive. Passing synthetic tests does not prove library completeness, independent backups, or safe removal.
+Review listens only on `127.0.0.1`. It requires a session token and checks Host
+and Origin. It serves allowlisted cached JPEGs, never originals or arbitrary
+paths. Filenames are rendered as text. Requests and preview sizes are bounded;
+links, reparse points and paths outside the cache are refused.
 
-Browser review requires a random per-session bearer token, exact loopback Host, and same-origin writes. It enables no CORS and restricts page resources through a Content Security Policy. Filenames and explanations are rendered as text, never inserted as HTML. Preview requests accept IDs, not filesystem paths; linked ancestors, symlinks/reparse points, traversal and out-of-cache paths are refused. Reads are capped at 8 MiB and leaf opens do not follow links. The cache remains trusted local state; these checks do not isolate it from a hostile local process racing directory replacements. Stop review before reindexing or auditing. Decisions bind to recorded scan/group/member content, remain historical after refresh, and never authorize later file actions.
+Treat app state as trusted local data. These checks do not isolate it from a
+hostile local process racing directory replacements. Pause other archive writers.
+
+Reports contain local paths; cloud research outputs may contain account IDs and
+session files. Keep them private. Decoder errors use safe categories.
+
+Use synthetic fixtures in development. See [build results](build-report.md) for
+what has actually been tested.

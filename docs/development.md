@@ -1,22 +1,26 @@
-# Development tooling
+# Development
 
-Use [the official Rust Style Guide](https://doc.rust-lang.org/style-guide/) for formatting and [the Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) for naming, documentation, traits, and public API design. `rustfmt.toml` selects standard Rust 2024 formatting with a 100-character line width.
+Use the [Rust Style Guide](https://doc.rust-lang.org/style-guide/) and
+[Rust API Guidelines](https://rust-lang.github.io/api-guidelines/).
+Rustfmt uses Rust 2024 style with a 100-character width. VS Code recommends
+[rust-analyzer](https://rust-analyzer.github.io/book/) and runs Clippy on save.
 
-Install the compiler components and the dependency checker:
+## Set up
+
+From the checkout:
 
 ```sh
+export CARGO_HOME="$PWD/.cargo-home"
+export UV_CACHE_DIR="$PWD/.uv-cache"
 rustup component add rustfmt clippy
 cargo install --locked cargo-deny --version 0.20.2
 uv sync --locked --project image-worker --group dev
 ```
 
-For sandboxed work, use the workspace-local Cargo and uv caches described in [AGENTS.md](../AGENTS.md). Install cargo-deny with that same `CARGO_HOME` and add its `bin` directory to your shell's `PATH` if needed.
+Add `$CARGO_HOME/bin` to PATH if cargo-deny is not found.
+Windows users can use the [setup and test scripts](windows-testing.md).
 
-## Editor feedback
-
-The VS Code workspace recommends [rust-analyzer](https://rust-analyzer.github.io/book/), formats Rust files on save, and uses Clippy for on-save diagnostics. Other editors can use the same language server. Editor feedback supplements the complete CI checks.
-
-## Required checks
+## Check changes
 
 ```sh
 cargo fmt --all -- --check
@@ -28,16 +32,22 @@ uv run --locked --project image-worker python -m unittest discover -s tests -v
 uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 ```
 
-On PowerShell, set `$env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'` before running `cargo test`. The worker must be installed before the required Rust integration test runs.
+In PowerShell, set `$env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'` before Cargo tests.
+Install the worker first. CI requires it and the cloud probe's pinned environment;
+missing dependencies must fail rather than skip those checks.
 
-Windows users can run these checks and synthetic CLI tests through `scripts\windows\test.ps1` after running `scripts\windows\setup.ps1`. See [Windows setup and testing](windows-testing.md) for optional external-drive testing and retained results.
+Clippy warnings are errors. Add stricter lints only when useful; do not enable
+whole pedantic or restriction groups.
 
-Clippy's default lints are enforced as errors in CI. Add stricter lints individually when they catch a relevant risk, with narrowly scoped explanations for exceptions. Do not enable the entire `restriction` group, whose lints can conflict.
+## Dependencies
 
-`deny.toml` checks advisory, license, dependency-version, and source policies across the supported macOS and Windows targets. It rejects security and unsoundness advisories, unmaintained dependencies, yanked versions, wildcard requirements, and unknown sources. Multiple transitive versions are warnings: the current graph needs both major versions of `syn` and `winnow`. The existing `directories` dependency uses MPL-2.0-licensed `option-ext`, which has an explicit crate-specific license allowance. Axum's router uses `matchit` (MIT AND BSD-3-Clause); its bundled license texts were reviewed and the BSD allowance is restricted to that crate. No advisories are ignored.
+Keep Cargo.lock and both uv.lock files with dependency changes. Update deliberately
+with `cargo update` or `uv lock --project <project>`; CI uses the committed locks.
 
-The dependency check runs in a separate Linux CI job. Rust formatting, Clippy, Rust integration/unit tests, HEIC/Python tests, SQLite schema tests, and the offline cloud probe run on macOS and Windows. The probe runs in its pinned provider environment so required adapter and MFA tests cannot silently skip. Cargo.lock, image-worker/uv.lock, and tools/cloud-probe/uv.lock are committed, and CI fails rather than replacing them with newly resolved dependencies.
+`deny.toml` checks advisories, licenses, versions and sources. No advisories are
+ignored. Duplicate `syn`/`winnow` versions are warnings. Crate-specific license
+allowances cover `option-ext` (MPL-2.0) and Axum's `matchit` (BSD-3-Clause).
 
-## Updating dependencies
-
-Resolve changes intentionally with `cargo update` or `uv lock --project image-worker`, then run the required checks and review the lockfile diff. Keep dependency and lockfile changes together. Record results and blockers in PR descriptions or task summaries; commit messages describe what changed and why.
+CI runs Rust/Python suites on macOS and Windows and dependency checks on Linux.
+Report checks in task summaries or PRs, not commit messages. Follow
+[AGENTS.md](../AGENTS.md) for safety, tests and commits.

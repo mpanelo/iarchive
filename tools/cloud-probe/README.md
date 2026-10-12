@@ -1,27 +1,23 @@
-# Read-only cloud access probe
+# Read-only cloud probe
 
-This research helper is separate from the `iarchive` executable. It reuses pinned
-`icloudpd` authentication and streaming downloads, with five explicit scopes:
+A separate research helper, not an `iarchive` command. It reuses pinned icloudpd
+sign-in and streaming downloads. **Agree on the account, album and scope before
+any live run.** Nothing modifies Photos records or enables removal.
 
-| Scope | Requests allowed |
-|---|---|
-| `auth` | Apple sign-in, verification and session trust only |
-| `libraries` | The same authentication plus private/shared library zone discovery |
-| `album` | Library discovery, album-name lookup, and metadata for one explicitly approved test album |
-| `originals` | The same metadata plus the exact two original-resource URLs from a completed test baseline |
-| `variants` | The same metadata plus four originals, one original motion companion and one full-image rendition from a four-asset baseline |
+| Scope | Access |
+| --- | --- |
+| `auth` | Sign-in, verification and session trust. |
+| `libraries` | Authentication plus private/shared library zones. |
+| `album` | One approved album's metadata. |
+| `originals` | Exactly two approved originals from a completed baseline. |
+| `variants` | Four originals, one motion companion and one full-image rendition from a four-asset baseline. |
 
-The first two scopes cannot list albums or photo records. The album scope checks
-both endpoint and query body: asset queries must name the exact approved album
-and complete discovered zone identity. Download scopes permit each approved
-URL once; previews, other resources and redirects to unapproved URLs are blocked.
-No scope modifies Photos records. Unexpected endpoints stop the probe. Download
-scopes check the approved asset count before requesting asset metadata.
-This is a bounded access test, not a complete cloud inventory or a removal test.
+Unexpected endpoints, queries, redirects and resource selections are blocked.
+This is a bounded experiment, not a complete cloud inventory.
 
-## Run locally on macOS
+## Prepare on macOS
 
-From the repository root, prepare the isolated environment:
+From the checkout:
 
 ```sh
 export UV_CACHE_DIR="$PWD/.uv-cache"
@@ -29,242 +25,164 @@ export UV_PYTHON_INSTALL_DIR="$PWD/.smoke/cloud-tools/python"
 uv sync --locked --project tools/cloud-probe --python 3.12
 ```
 
-The pinned provider requires Python below 3.14. This command lets uv install a
-compatible Python inside the checkout and keeps its virtual environment in
-`tools/cloud-probe/.venv`. It does not change the system Python.
-The lock selects the official pure-Python wheel so the helper can import the
-provider and guard its transport; the platform wheel instead bundles executables.
+The provider needs Python below 3.14. Managed Python stays in the checkout; the
+venv is `tools/cloud-probe/.venv`. The lock uses the official pure-Python provider
+wheel so the helper can guard its transport.
 
-After approving the intended scope, run **directly in your own interactive
-Terminal**, with either `auth` or `libraries`:
+## Authenticate and discover libraries
+
+After approval, run in your own interactive Terminal:
 
 ```sh
 uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-probe/probe.py libraries
 ```
 
-On macOS, `tools/cloud-probe/run-macos.command` opens in Terminal when
-double-clicked and applies those checkout-local environment settings. Its
-default scope is `libraries`; from a shell it forwards all supplied arguments.
+Or double-click `run-macos.command`, which defaults to `libraries` and sets the
+local environment. From a shell it forwards supplied arguments.
 
-Type `READ ONLY LIBRARIES` at the scope prompt. Then enter your account email
-and password locally. The upstream two-factor flow explicitly requests a push
-notification to your trusted devices. If no code arrives, enter the letter beside
-one of the displayed masked phone numbers to request an SMS, then enter that
-code. Account/password/code inputs are hidden. Do not send credentials or
-verification codes in chat. This helper uses
-upstream authentication rather than implementing its own login protocol, and
-does not use a keyring password provider. Upstream documents its console
-authentication and account compatibility in the [authentication guide](https://icloud-photos-downloader.github.io/icloud_photos_downloader/authentication.html).
+Type `READ ONLY LIBRARIES`. Enter account credentials locally; inputs are hidden.
+Upstream requests a push code. If it does not arrive, choose a displayed masked
+phone number for SMS. Never send passwords or codes in chat.
 
-Authentication has not been verified for every account configuration. The probe
-does not change security settings or attempt to work around unsupported ones.
-Apple may issue its normal sign-in notifications or verification prompts.
+The helper uses upstream login, not its own protocol or a keyring provider. Some
+account configurations remain unsupported. It does not change security settings.
+See [upstream authentication](https://icloud-photos-downloader.github.io/icloud_photos_downloader/authentication.html).
 
-## One approved test album
+## Read one test album
 
-After agreeing on a test album and metadata-only scope, run:
+After agreeing on the album and metadata-only scope:
 
 ```sh
-tools/cloud-probe/run-macos.command album --album 'Synthetic test album'
+tools/cloud-probe/run-macos.command album --album 'Synthetic test album' --expected-assets 4
 ```
 
-Type `READ ONLY ALBUM` at the local prompt. The probe locates that exact album
-name and rejects absent, duplicate or incomplete matches. It makes two bounded
-metadata passes (at most 1,000 assets), checks membership counts before and after
-each pass, and compares full record identities, change tags and resource metadata.
-For a known two- or four-item fixture set, append `--expected-assets 2` or
-`--expected-assets 4` to stop before asset enumeration if its count differs.
-Album-membership relation records are preserved separately from assets and masters.
-It requests neither captions nor locations. Signed media URLs and wrapping keys
-are removed before output; only URL availability is recorded. Provider checksums
-are opaque values, not assumed to be SHA-256.
+Type `READ ONLY ALBUM`. Use `--expected-assets 2` for the two-item fixture.
+Unexpected counts stop the run before asset enumeration.
 
-To reuse a previous authenticated session, append
-`--reuse-session cloud-probe-<run-name>` using the basename printed by that run.
-Only a run under this checkout's `.smoke` with a matching provider and successful
-authentication summary is accepted. Upstream revalidates the session and may
-still request credentials or verification. It updates that previous run's sensitive
-cookie cache; the new run gets its own output directory. Run only one probe at a time.
+The probe rejects missing, duplicate or incomplete album matches. It makes two
+metadata passes, bounded to 1,000 assets, comparing membership, full identities,
+change tags and resource metadata. Membership, asset and master records stay
+separate. Captions/locations are not requested; signed URLs and wrapping keys are
+removed from output. Provider checksums remain opaque.
 
-## Resource observations
+For session reuse, add `--reuse-session cloud-probe-<run-name>`. Only a successful
+matching run beneath this checkout's `.smoke` is accepted. Upstream revalidates
+it and may ask for credentials. Reuse updates that run's sensitive cookie cache;
+new outputs get their own directory. Run one probe at a time.
 
-Album metadata runs also create `resource-report-private.json`. Each observed
-resource remains a separate entry with its full owner-record identity and change
-tag, field name, declared size, opaque checksum, file type, and URL availability.
-The report retains the album and zone identities. Asset entries reference those
-resources through the returned `masterRef`; duplicate names or checksums do not
-merge entries. Signed URLs and wrapping keys are removed before persistence.
+## Resource report
 
-The labels describe returned fields rather than proving their media contents:
+`resource-report-private.json` keeps each resource's full owner identity/tag,
+field, size, type, opaque checksum and URL availability. Assets reference masters
+through returned `masterRef`; equal names/checksums do not merge resources.
 
-| Returned resource fields | Report label |
-|---|---|
+| Provider field | Label |
+| --- | --- |
 | `resOriginalRes` | Original |
 | `resOriginalAltRes` | Alternate original |
 | `resOriginalVidComplRes` | Original video companion |
-| `resJPEGFullRes`, `resVidFullRes` | Full image or video |
+| `resJPEGFullRes`, `resVidFullRes` | Full image/video |
 | `resSidecarRes` | Sidecar |
-| Other requested JPEG/video sizes | Preview image or video |
-| Unexpected returned resource fields | Unknown |
+| Other requested JPEG/video sizes | Preview |
+| Unexpected fields | Unknown |
 
-These field interpretations follow the [pinned provider source](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/pyicloud_ipd/services/photos.py).
-The helper inventories the requested raw fields rather than relying on the
-provider's version lookup, which does not include every requested field.
-It makes no extra metadata queries to generate this report.
+Labels follow the [pinned provider source](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/pyicloud_ipd/services/photos.py).
+The report uses raw requested fields because the provider's version lookup omits
+some. It makes no extra queries.
 
-Findings include an absent original, metadata without a corresponding resource,
-the same resource field on both asset and master, shared or unreferenced masters,
-unknown fields, empty resources, and missing file types or URLs. Both owners'
-entries remain present when ownership is ambiguous. Pair confidence stays
-`unknown`: a record association alone does not prove a Live Photo or RAW/JPEG
-relationship within the media bytes. Printed summaries contain only role and
-finding counts; full identities and unexpected field labels remain private.
+Missing originals, types or URLs, empty resources, ambiguous owners, shared or
+unreferenced masters and unknown fields remain findings. Ambiguous resources
+stay separate. Pair confidence remains `unknown`; record links do not prove
+media content relationships.
 
-The offline fixture suite covers Live Photo still/motion, video, original/full-size
-render, sidecar, and RAW/JPEG examples, including either RAW/JPEG resource order.
-`resources.build_resource_report()` can also compare a sanitized observation with
-an explicit mapping from full asset IDs to exact expected resource-field lists.
-It reports missing and unexpected fields and how many assets had expectations.
-Those expectations describe the caller's disposable fixtures; they are not
-inferred from filenames, opaque subtype flags, or checksums. Live runs currently
-report `expectation_status: NOT PROVIDED`.
+Offline fixtures cover originals, renders, motion, video, sidecars and RAW/JPEG.
+`resources.build_resource_report()` can compare full asset IDs with explicit
+expected field lists. Live runs currently use `expectation_status: NOT PROVIDED`.
+Even `MATCHED OBSERVED FIELDS` proves metadata agreement only. Unrequested or
+unknown variants may remain undiscovered.
 
-Even `MATCHED OBSERVED FIELDS` proves only that the supplied field expectations
-matched the observed metadata without resource findings. No media content is
-verified by this report. The query requests a known projection of fields, so
-unreturned or unknown variants may remain undiscovered. Complete resource
-inventory, content mapping, and the provider checksum algorithm remain
-`NOT VERIFIED`. A live variant test needs a separately agreed disposable album
-and read/download scope.
+## Download two originals
 
-## Two approved originals
-
-This separate scope requires explicit download approval and a successful metadata
-run containing exactly two assets and two masters. Replace `cloud-probe-example`
-below with the basename of that metadata run:
+Requires separate download approval and a completed two-asset/two-master baseline.
+Replace `cloud-probe-example` with that run's basename:
 
 ```sh
 tools/cloud-probe/run-macos.command originals --album 'Synthetic test album' --baseline cloud-probe-example
 ```
 
-Append `--reuse-session cloud-probe-<authenticated-run>` to reuse a session, as
-above. Type `DOWNLOAD TWO ORIGINALS` at the local prompt. The probe repeats the
-album metadata passes and requires the full identities, change tags and resource
-metadata to match the baseline. It fetches only `resOriginalRes`, retaining signed
-URLs in memory only. Ambiguous ownership, unsafe URLs, extra assets and changed
-metadata stop the test. Each original is limited to 256 MiB and 180 seconds, plus
-the provider's 30-second per-request timeout. No automatic retry or partial-file
-resume is attempted; partial bytes and per-file progress remain available.
+Type `DOWNLOAD TWO ORIGINALS`. Full identities, tags and metadata must still match.
+Only `resOriginalRes` is fetched. Limits: 256 MiB and 180 seconds per original,
+plus a 30-second provider request timeout. Ambiguity, unsafe URLs or drift block
+it. There is no automatic retry or partial-byte resume.
 
-The pinned provider opens each streamed download. Byte counts must match the
-declared resource size, partial HTTP ranges must cover the full object, and known
-error-document content types are rejected. Fresh files use generated names, with
-exclusive creation and link/reparse checks. Each download is copied into a second
-directory, then both files are reopened and independently SHA-256 hashed. A third
-metadata pass checks for changes during the test.
+## Download six resources
 
-Matching hashes show that the two local files contain the same bytes received
-from the selected original-resource request. They do not establish the algorithm
-of the provider's opaque checksum or an independent remote SHA-256 match. Both
-directories are on the checkout's filesystem: disk failure can lose both copies.
-Physical backup independence requires separately verified drives. This is a
-bounded download/mapping test; it does not establish complete cloud backup or
-enable removal.
-
-## Six selected test resources
-
-This separately approved experiment requires a completed metadata-only baseline
-with exactly four assets and four masters. It selects exactly four
-`resOriginalRes` resources, one `resOriginalVidComplRes` and one `resJPEGFullRes`:
+Requires separate approval and a four-asset/four-master metadata baseline:
 
 ```sh
 tools/cloud-probe/run-macos.command variants --album 'Synthetic test album' --baseline cloud-probe-example
 ```
 
-Type `DOWNLOAD SIX RESOURCES` in your own Terminal. Session reuse works as above.
-Prepare its metadata baseline with `album --expected-assets 4` when the agreed
-scope is four items; inspect any drift before approving a replacement baseline.
-Each selected resource is limited to 32 MiB, with a 64 MiB total limit. The same
-180-second per-resource limit, streaming-response checks, single-use URL guard,
-two-copy hashing and post-download metadata comparison apply. Exact owner IDs
-and tags, resource fields, file types, lengths and opaque checksums are bound
-separately; signed URLs remain in memory. Missing or ambiguous selected owners,
-different resource counts, drift or URL normalization collisions stop the run.
+Type `DOWNLOAD SIX RESOURCES`. Selection is exactly four `resOriginalRes`, one
+`resOriginalVidComplRes` and one `resJPEGFullRes`. Limits: 32 MiB per resource,
+64 MiB total and 180 seconds per resource, plus the provider timeout.
 
-Previews, sidecars and alternate originals are outside this download selection.
-Their metadata remains in the observation, including findings. An ambiguity in
-an unselected preview does not merge its owners or authorize downloading it.
-Resources use generated `resource-NN` names with an extension selected from a
-fixed file-type mapping (or `.bin` for other types). The private manifest records
-each file's owner, field and declared type. Original bytes are not converted.
+Owner IDs/tags, fields, types, sizes and checksums are bound separately. Missing
+or ambiguous selected owners, drift, unexpected counts or normalized URL
+collisions block the run. Unselected preview/sidecar/alternate metadata remains
+in the report; it is not permission to download those resources.
 
-Success requires `resource_download_completed` in `summary.json`, including the
-final metadata comparison. `original_download_completed` applies only to the
-older two-original scope. Independent hashes establish the selected response's
-association with two local copies. Playback, decoding, Live Photo content
-pairing and matching a rendition to the user's edit require further local
-content checks. This experiment does not establish complete archival coverage.
+## Download checks
 
-## Outputs and interpretation
+Both download scopes use single-use approved URLs held only in memory. They
+stream through the pinned provider, check declared byte counts and full ranges,
+and reject error-document content types. Fresh files use exclusive creation,
+generated names and link/reparse checks. Bytes are never converted.
 
-Each run creates a new ignored directory beneath `.smoke/cloud-probe-*`:
+Each file is copied into a second directory and both copies are independently
+SHA-256 hashed. Partial files and progress are retained after failure. A final
+metadata pass checks drift. Success requires `resource_download_completed` in
+`summary.json`; the older originals scope also records `original_download_completed`.
 
-- `summary.json`: authentication status, discovery status, request counts,
-  private/shared library counts, missing owner-identity indications and findings.
-- `zones-private.json`: complete returned zone identities, only for the
-  `libraries`, `album` and `originals` scopes. Keep this local; it is unnecessary to share it to report
-  whether the probe succeeded.
-- `cookies/`: sensitive upstream session and cookie files. Keep these local
-  and never commit, upload or paste them into chat. On macOS the run directory
-  is created with mode `0700` and files with a restrictive process umask.
-- `album-private.json`: full album, asset and master IDs, change tags and sanitized
-  resource metadata from both passes, plus the resource report for the second
-  pass. Keep local; it contains account-specific IDs.
-- `resource-report-private.json`: separate resource entries, full owner bindings,
-  asset/master associations, and findings for the observed resource metadata.
-  `metadata_passes_match` records whether the two observations agreed. Keep local.
-- `album-pass-*-page-*.json`: sanitized page progress, retained even if interrupted.
-  These partial pages are explicitly incomplete; use the summary to check completion.
-- `copy-a/` and `copy-b/`: downloaded resources and their independently checked
-  local copies, only for `originals` or `variants`. These are private test media;
-  never commit or upload them.
-- `download-plan-private.json` and per-file progress/verification files: full
-  account/database/zone/asset/master/resource bindings and local hash results.
-- `download-manifest-private.json`: completed local copy verification. Overall
-  success additionally requires `resource_download_completed` in the summary,
-  which includes the post-download cloud metadata comparison.
-- `post-download-private.json`: sanitized metadata after the download test.
+Equal local hashes do not prove a remote SHA-256 match or the provider checksum
+algorithm. Both copies are on one filesystem. Playback, decoding, Live Photo
+pairing and edit matching need separate content checks. None of this proves
+complete archival coverage or independent backups.
 
-Only the summary is printed. Upstream response bodies, signed URLs, exception
-messages and debug logs are suppressed. A blocked or incomplete run exits with
-a nonzero status and keeps an explicit finding. An absent owner identity is
-reported as absent, rather than invented from the current account.
+## Keep outputs private
 
-Successful discovery proves only that the selected endpoints responded to this
-account. It does not prove complete Personal/Shared/Hidden media coverage,
-resource identity, checksum equivalence, stable snapshots, physical backups or
-safe removal. Those statuses remain `NOT VERIFIED`.
+Every run creates `.smoke/cloud-probe-<id>`:
 
-Matching metadata passes do not prove an atomic snapshot or a complete resource
-inventory. The metadata scopes read no media bytes. The download scopes record
-byte associations for their selected resources and check local copies; broader
-resource/content mapping and independent physical backup verification remain open.
-Removal tests require their own explicit authorization. Do not use private archives
-as development fixtures.
+| Output | Contents |
+| --- | --- |
+| `summary.json` | Status, counts and findings; the only printed output. |
+| `cookies/` | Sensitive upstream sessions. Never commit or share. |
+| `zones-private.json` | Returned zone identities from discovery. |
+| `album-private.json` | Album/asset/master identities and sanitized passes. |
+| `resource-report-private.json` | Resource ownership and metadata findings. |
+| `album-pass-*-page-*.json` | Partial progress; incomplete until the summary says otherwise. |
+| `copy-a/`, `copy-b/` | Private downloaded test media, for download scopes only. |
+| `download-plan-private.json`, progress files | Approved bindings and per-file progress. |
+| `download-manifest-private.json` | Completed local copy checks. |
+| `post-download-private.json` | Sanitized final metadata. |
 
-macOS success establishes behavior on macOS. The same pinned package and scripts
-can subsequently be exercised on Windows; terminal handling, authentication,
-paths and filesystem protections still require Windows runtime verification.
+Do not upload or commit private reports, media or cookies. macOS run directories
+use mode `0700` and a restrictive umask. Raw responses, signed URLs, wrapping
+keys, exceptions and debug logs are suppressed. Failures retain explicit findings
+and exit nonzero.
+
+Matching passes do not prove an atomic snapshot or complete Personal/Shared/Hidden
+coverage. Missing owner identity stays absent, never invented. macOS results do
+not establish Windows behavior. Removal tests need their own approval; private
+archives are never development fixtures.
 
 ## Offline checks
 
-These tests use fake responses and forbid socket creation. Run them in the pinned
-provider environment so the adapter and MFA checks exercise the upstream package.
-They require no account access:
+These fake-response tests forbid sockets and need no account:
 
 ```sh
 uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
 ```
 
-CI and the Windows test script run this command separately from the image-worker
-tests. Missing provider dependencies fail the checks rather than skipping them.
+CI and Windows tests run this separately from image-worker tests. Missing provider
+dependencies fail instead of skipping integration coverage.

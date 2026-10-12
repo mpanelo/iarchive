@@ -47,6 +47,14 @@ Document the replication workflow
 Document the commit message convention
 ```
 
+## Documentation
+
+- Write short, plain instructions for a person using the app.
+- Put each command on its own line. Show only what the reader needs to run.
+- Keep automation, exit-code guards and error-handling boilerplate in scripts.
+- Use one main workflow; link to references instead of repeating them.
+- Keep necessary safety limits and exact test evidence. Put implementation details in technical docs.
+
 ## Tests
 
 - Add tests for distinct behavior, meaningful edge cases, safety invariants, or regressions. Check existing coverage first; avoid tests for trivial edits or tests that merely mirror the implementation.
@@ -77,4 +85,4 @@ CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows
 
 Windows scripts keep project tools and temporary files in the checkout's `.windows-sandbox` directory and use process-only environment settings. Setup detects compatible prerequisites and installs missing ones through WinGet by default; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` in preconfigured CI to check dependencies without running installers. Exercise discovery and simulated installation tests under PowerShell 7 and Windows PowerShell 5.1; never run real system installers during development on a user machine. Directory scoping is not OS isolation. External-drive tests require explicit drive arguments and use only fresh synthetic runs beneath a marked `iarchive-sandbox` directory. See [Windows setup and testing](docs/windows-testing.md).
 
-See docs/CLI.md for a synthetic smoke test, docs/replication.md for copy/verify workflows, and docs/safety.md for scope limits.
+Start user instructions at docs/workflows.md. Use docs/CLI.md for options, docs/replication.md for recovery, and docs/safety.md for limits.

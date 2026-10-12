@@ -1,153 +1,94 @@
-# Replication and deep verification
+# Replication and recovery
 
-`replicate` copies every readable raw file, including videos, edits, sidecars,
-unknown formats and zero-byte files. It preserves relative filenames and attempts
-to preserve modification times. It does not decode, convert, rename or filter
-files based on image-review candidates. Empty directories and filesystem metadata
-such as ACLs, extended attributes and alternate data streams are not archived.
+Use the [full workflow](workflows.md) for commands in order.
 
-**Experimental:** start with the [end-to-end synthetic workflow](workflows.md).
-Recorded Windows checks cover synthetic two-drive copying, recovery and process
-interruption. Real USB disconnect/reconnect behavior remains untested. These
-commands never approve cloud removal.
+`replicate` copies every eligible raw file, including videos, edits, sidecars,
+unknown formats and empty files. It never filters by review decisions, converts
+originals, overwrites conflicts or prunes extras. It tries to preserve modification
+times. Empty directories, ACLs, extended attributes and alternate data streams
+are not archived.
 
-## Directory layout
+## Paths
 
-All four directories must already exist. Media and artifact directories must be
-separate, with no overlapping roots, symlinks or Windows reparse points. App state
-must also be outside them. Each artifact directory must be on the same volume as
-its corresponding media directory. State and artifact directories must not sit
-inside another imported or configured archive.
+All media and artifact directories must already exist. Keep them separate from
+app state, with no overlapping roots, symlinks or reparse points.
 
 ```text
-primary volume/
-  media/                      original source, read-only
-  artifacts/                  manifests, summaries and SQLite backups
-secondary volume/
-  media/                      destination, never overwritten or pruned
-  artifacts/                  backup bundles and retained copy partials
-app state/                    SQLite progress and another backup bundle
+primary/media/        unchanged source
+primary/artifacts/    bundles
+secondary/media/      replica
+secondary/artifacts/  bundles and partials
+app-state/            SQLite, previews and another bundle
 ```
 
-Use `--secondary PATH`, or the secondary configured with `init`. Both artifact
-paths are explicit on every invocation. A missing root is treated as unavailable;
-the command does not recreate a disconnected media root.
+Each artifact directory must be on its media directory's volume. Supply both
+artifact paths every time. `--secondary` can use the path configured by `init`.
+A disconnected media root is not recreated.
 
 ## Preview, copy and verify
 
-The [end-to-end workflow](workflows.md#6-preview-replication-then-copy) provides
-Windows and macOS commands using one cycle and a consistent directory layout.
-It covers dry-run preflight, copying, review and final deep verification, including
-the explicit acknowledgment needed for a same-volume byte-only demo.
+- `--dry-run replicate`: hash and check paths, conflicts and capacity; write nothing.
+  A passing preview still reports `complete: false`.
+- `replicate`: copy missing files, rehash both roots and publish bundles.
+- `verify --deep`: independently rehash both roots and refresh bundles; copy no media.
 
-The dry run reads and hashes files to calculate missing bytes and detect conflicts;
-it writes no media, state, progress or reports. Read results from the console.
-It is a preview, so `complete` remains false even when preflight passes. Repeat
-the same `replicate` command to exercise resuming: matching files are rehashed,
-then skipped rather than copied again.
+For two folders on one volume, use `--allow-unverified-devices` to acknowledge a
+byte-only check. macOS also needs this flag because physical backing disks are
+not resolved. It never turns physical independence into a verified result.
 
-`--allow-unverified-devices` explicitly acknowledges a byte-only check. It is
-necessary for these two folders on one volume and for macOS, where this build
-binds filesystem device/inode identities but does not resolve physical backing
-disks. It never changes `independent_physical_drives` into a verified result.
+Windows requires distinct known backing disks. Unknown, pooled, virtual, network
+or spanned storage remains **NOT VERIFIED**. An unavailable stable root/volume
+identity blocks the operation even with the flag. Driver topology is not a
+guarantee against inaccurate or virtualized hardware.
 
-## Windows synthetic tests
+Use [Windows two-drive tests](windows-two-drive-test.md) to check synthetic copies
+across physical drives. Physical USB disconnect/reconnect remains untested.
 
-The [Windows test script](windows-testing.md) runs the same copy/verify workflow
-in fresh generated directories, checks safe reruns and backup-bundle digests, and
-deliberately corrupts one generated destination file to check invalidation.
-Its source snapshots must remain unchanged. Each selected external drive gets
-its own same-volume synthetic source and replica; this exercises byte copying,
-not independence between drives.
+## Conflicts and interruptions
 
-After those tests pass, follow the [Windows two-drive acceptance plan](windows-two-drive-test.md).
-Its script creates a fresh synthetic source on one drive and an empty replica on
-the other, checks independent PowerShell hashes and restores state from each
-drive's backup. It also checks conflicts, missing files and unavailable roots,
-with a separate required process-interruption/resume check. Do not reuse the
-test script's completed fixture: it includes deliberately invalid files.
+- Conflicts and extra destination files are retained and block completion.
+- Missing, unreadable, partial or linked inputs and name collisions block completion.
+  Undecodable media can still be backed up as bytes.
+- New copies use `.partial` files in secondary artifacts. Only completed files
+  are published, without overwriting an existing destination.
+- Reruns rehash matching files and skip them. Unfinished files restart from zero;
+  retained partials are never trusted.
+- Changed source content or a replaced root blocks reuse of the frozen cycle.
+  Investigate it; use a new cycle only for an intentionally changed snapshot.
+- Capacity checks include the configured margin (default 15%) and an artifact
+  reserve. Later disk exhaustion still leaves the operation incomplete.
 
-Windows binds volume GUIDs and root file identities. Native read-only queries
-accept distinct disk extents only when drivers report ATA, USB, SATA or NVMe
-backing. Pooled, virtual, network, spanned and unavailable device information
-retain **NOT VERIFIED**. A refusal does not imply a drive is broken. Adding
-`--allow-unverified-devices` permits byte-only verification, but does not establish
-physical independence. OS-reported topology is not a guarantee against inaccurate
-drivers or virtualized hardware.
-If a stable volume/root identity cannot be obtained, the command stops even with
-that acknowledgment.
-
-## Conflicts, interruption and capacity
-
-- Existing destination files are independently hashed. A mismatch blocks the
-  whole preflight; no conflict is overwritten or renamed automatically. Extra
-  destination entries are reported and retained, and prevent completion.
-- Linked entries, partial source files, traversal errors, unreadable files,
-  non-portable Windows names and case/Unicode collisions prevent completion.
-  Unknown file types and undecodable images remain eligible for byte copying.
-- New copies stream into uniquely named `.partial` files beneath the secondary
-  artifact directory. They are synced and published without clobbering a target.
-  Failed/interrupted partials remain outside media and never count as verified.
-- Rerun the same command after restoring availability. Completed targets are
-  rehashed; unfinished files start again from byte zero. This is resume by file,
-  not resume within a partially copied file. Old partials remain for inspection.
-- A frozen binding records the initial source paths, lengths, timestamps and
-  hashes plus the secondary root/volume identity. Changed source content or a
-  replaced root blocks reuse of the cycle. Restore the frozen input or explicitly
-  register a new cycle for a deliberately changed archive; reusing a drive letter
-  alone cannot establish identity.
-- Preflight checks currently available space with the configured margin
-  (`free_space_margin`, default 15%) and an additional artifact reserve. Concurrent
-  disk usage can still exhaust space afterward; such failures remain incomplete.
-
-Each completed file and copy progress are recorded by one SQLite writer.
-Starting another replica operation invalidates previous completion; an unfinished
-run is recorded as interrupted on the next invocation. `index` also invalidates
-saved verification. `verify --deep` always rehashes both roots, including existing
-targets, and performs final inventories to detect changes during the operation.
-Pause other programs writing to these directories: this is not an atomic OS
-snapshot or a defense against a hostile process racing directory replacements.
-
-Automatic tests inject copy interruption, capacity failure, root replacement,
-source edits and destination conflicts. A folder replacement is not a physical
-USB disconnect. Real disconnect/reconnect testing should use disposable drives
-and synthetic files, then confirm a rerun recovers without treating missing or
-partial files as verified. That manual hardware check remains outstanding.
+Pause other programs writing to these roots. This is not an OS snapshot.
+A new index, audit or replica operation invalidates saved replica completion.
 
 ## Results and recovery
 
-Exit 0 means the requested operation completed. Exit 2 includes a report with
-findings and invalidates saved replica completion. Exit 1 is an invocation or
-state error. Successful replication and verification reports distinguish:
-
 | Field | Meaning |
 | --- | --- |
-| `local_replica: LOCAL BYTES VERIFIED` | Both local file sets were independently read and matched for this operation. |
-| `independent_physical_drives` | OS topology result, or `NOT VERIFIED`; separate from byte equality. |
-| `cloud_coverage: NOT VERIFIED` | Nothing here proves all cloud assets or iPhone uploads are captured. |
-| `artifact_bundles` | Three completed bundle locations: state, primary artifacts and secondary artifacts. |
+| `local_replica: LOCAL BYTES VERIFIED` | Both local file sets matched for this operation. |
+| `independent_physical_drives` | Windows topology result, or `NOT VERIFIED`. |
+| `cloud_coverage: NOT VERIFIED` | Cloud completeness was not established. |
+| `artifact_bundles` | Bundle paths in state and both artifact directories. |
 
-Bundles contain identical `manifest.jsonl`, a standalone SQLite backup made through
-SQLite's backup API, and `summary.json`. The summary records the manifest and
-database SHA-256 digests. The manifest preserves every file separately; it does
-not infer cloud IDs or Live Photo/edited-photo pairing. Publication failures
-invalidate live SQLite completion and retain partial artifacts for inspection.
-The standalone database snapshot captures fully verified per-file progress in
-`PUBLISHING`, before the final publication record. Live state becomes `VERIFIED`
-only after all bundles have been saved. Restored snapshots therefore require a
-new deep verification; they do not claim that publication previously finished.
-Already published bundles remain historical byte observations, not evidence that
-a later run completed or that files are still intact.
+Exit 0 means the operation completed. Exit 2 reports findings and invalidates
+completion. Exit 1 is an invocation or state error.
 
-To recover state, verify a bundle's digests and copy its `manifest.sqlite` into a
-**new, empty app-state directory**. Do not copy a live SQLite main file by itself,
-or mix restored state with old WAL/SHM files. Stop all iarchive processes first.
-Run with `--state-dir` pointing to the recovered directory and supply the media
-and artifact paths again. Backup roots are hints for their original locations;
-relocated mounts need explicit handling rather than silently rebinding them.
-Run `verify --deep` before relying on recovered state. Recovery from either
-standalone drive backup is covered by synthetic CLI tests.
+Each bundle contains identical `manifest.jsonl`, `manifest.sqlite` and
+`summary.json`. The summary records manifest/database SHA-256 digests. A bundle
+is a historical observation; later changes or failed runs can invalidate it.
 
-`status` shows the last `replica_state` and run ID, while its `local_replica` remains
-**NOT VERIFIED** because it performs no current filesystem reads. Image decoding,
-offsite protection and cloud coverage are separate from local byte verification.
+To recover:
+
+1. Stop all iarchive processes.
+2. Check the bundle's digests.
+3. Copy `manifest.sqlite` into a new, empty state directory. Do not mix old WAL/SHM
+   files with it or copy only the main file of a live database.
+4. Use that directory with `--state-dir` and supply the original media/artifact paths.
+5. Run `verify --deep` before relying on the restored state.
+
+Backups capture `PUBLISHING`, before final publication. Restored state therefore
+needs fresh verification. Relocated roots need explicit handling; reusing a drive
+letter does not preserve identity.
+
+`status` shows saved state and keeps local bytes **NOT VERIFIED** because it does
+not read current media. See [safety](safety.md) for other limits.
