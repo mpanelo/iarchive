@@ -1,6 +1,11 @@
-# CLI and developer commands
+# CLI reference and developer commands
 
-Run from the repository root. Requirements: stable Rust/Cargo, uv, Python 3.12–3.14 managed by uv, and network access for the initial dependency installation. ffprobe and icloudpd are optional for the current commands.
+For the complete command chain, start with the [end-to-end workflow](workflows.md).
+This page is the option and developer-check reference.
+
+Run from the repository root. Requirements: stable Rust/Cargo, uv, Python
+3.12–3.14 managed by uv, and internet access for initial dependency installation.
+ffprobe and icloudpd are optional for the current commands.
 
 ## Bootstrap and checks on macOS
 
@@ -24,32 +29,23 @@ cargo build --release --locked
 
 Update lockfiles deliberately alongside dependency changes; see [development tooling](development.md). If Python dependencies are absent, raw import/index/export still work. The Rust worker integration test requires the uv venv; CI sets `IARCHIVE_REQUIRE_WORKER_TESTS=1` to prevent skipping it.
 
-## Synthetic scan and reports
+## Synthetic examples
 
-```sh
-python3 fixtures/generate.py --output .smoke/clean-media --clean
-target/release/iarchive --state-dir .smoke/state doctor --primary .smoke/clean-media
-target/release/iarchive --state-dir .smoke/state --dry-run import --source .smoke/clean-media --cycle demo
-target/release/iarchive --state-dir .smoke/state import --source .smoke/clean-media --cycle demo
-target/release/iarchive --state-dir .smoke/state index --cycle demo
-target/release/iarchive --state-dir .smoke/state audit --cycle demo
-target/release/iarchive --state-dir .smoke/state --json report --cycle demo
-target/release/iarchive --state-dir .smoke/state export-manifest --cycle demo --output .smoke/manifest.jsonl
-```
+The [end-to-end workflow](workflows.md#2-create-a-fresh-demo-and-define-paths)
+uses fresh paths for one synthetic cycle on both platforms. It includes valid
+PNG/JPEG/HEIC fixtures, inventory, audit, export, copying, browser review and
+final deep verification. Use that guide's variables consistently rather than
+mixing state paths from different demos.
 
-To include synthetic JPEG/HEIC and rotated HEIC, generate a fresh directory with:
-
-```sh
-uv run --locked --project image-worker python fixtures/generate.py --output .smoke/heic-media --clean --with-heic
-```
-
-Omitting `--clean` includes intentionally corrupt HEIC, unsupported RAW, unknown bytes, video dummy bytes, an empty JPEG, and a `.partial` file. Inventory/audit then report incomplete results and exit 2 as expected. These bytes are synthetic, not genuine videos/RAW. Existing fixture directories and manifest filenames are never overwritten.
-
-`report` shows saved candidate groups, per-image measurements and preview paths, decode/file errors, and status. Open preview JPEGs from the reported thumbnail cache with a local image viewer. Use `review --cycle demo` with the same state directory to browse them and save review notes; see [browser review](review.md).
+The generator's `--clean` option selects valid images. Omitting it includes
+intentionally corrupt/unsupported files, dummy video/RAW bytes, an empty JPEG
+and a `.partial` file; inventory/audit then report incomplete results and exit 2.
+These are synthetic bytes, not genuine videos or RAW images. Existing fixture
+directories and manifest filenames are never overwritten.
 
 ## Options and exit codes
 
-All commands have `--help`, global `--state-dir`, `--json`, and `--dry-run`. Dry runs describe operations without hashing or invoking the image worker. Doctor is already diagnostic and performs local capability checks. Normal output is readable JSON; `--json` emits compact JSON reports and structured stderr logs. `RUST_LOG=warn` suppresses routine progress logs.
+All commands have `--help`, global `--state-dir`, `--json`, and `--dry-run`. Dry runs preview writes without changing media or state. Replica dry runs still read and hash media for preflight; inventory/audit dry runs do not scan or invoke the image worker. Doctor is already diagnostic and performs local capability checks. Normal output is readable JSON; `--json` emits compact JSON reports and structured stderr logs. `RUST_LOG=warn` suppresses routine progress logs.
 
 - `init --primary PATH [--secondary PATH]`: create TOML config/DB in app state; primary must exist. An unavailable secondary is allowed in config, with readiness unverified. A changed existing config is not silently overwritten.
 - `import --source PATH --cycle ID`: register the canonical source root. Rerunning for the same root/ID is idempotent. Cycle IDs are ASCII letters, digits, `_`, `-` (1–80 characters).
@@ -68,38 +64,14 @@ Default state comes from `directories::ProjectDirs`: `%LOCALAPPDATA%\iarchive\da
 
 ## Windows 11 x64 / PowerShell
 
-For automated setup, quality checks, synthetic smoke tests, and optional external-drive tests, use the [Windows setup and test scripts](windows-testing.md):
+Use the [end-to-end workflow](workflows.md#1-set-up-the-checkout) for setup,
+automated checks and the complete command sequence. The
+[Windows setup guide](windows-testing.md) explains prerequisite detection,
+project-local tool storage, process-only execution policies and troubleshooting.
+The [two-drive acceptance guide](windows-two-drive-test.md) tests fresh synthetic
+files on selected physical drives; it never scans existing archives.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\setup.ps1
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "& '.\scripts\windows\test.ps1' -ExternalDrives 'D:', 'E:'"
-```
-
-Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup automatically reuses compatible prerequisites and installs missing ones through WinGet; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` to check without installing. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
-
-Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI. The recorded synthetic two-drive tests passed; new gallery behavior and physical USB disconnects still need separate runtime checks.
-
-```powershell
-uv sync --locked --project image-worker --group dev --python 3.12
-cargo build --release --locked
-uv run --locked --project image-worker python fixtures/generate.py --output .smoke\windows-media --clean --with-heic
-$iarchiveExe = Join-Path $PWD 'target\release\iarchive.exe'
-& $iarchiveExe --state-dir .smoke\windows-state import --source .smoke\windows-media --cycle demo
-& $iarchiveExe --state-dir .smoke\windows-state index --cycle demo
-& $iarchiveExe --state-dir .smoke\windows-state audit --cycle demo
-& $iarchiveExe --state-dir .smoke\windows-state report --cycle demo
-```
-
-Only after dependency/platform checks and synthetic dry runs pass, these are the intended read-only runtime commands for the existing archive:
-
-```powershell
-& $iarchiveExe doctor --primary 'D:\iCloud Photos' --secondary 'E:\iCloud Photos Backup'
-& $iarchiveExe init --primary 'D:\iCloud Photos' --secondary 'E:\iCloud Photos Backup'
-& $iarchiveExe --dry-run import --source 'D:\iCloud Photos' --cycle 2026-10-10
-& $iarchiveExe import --source 'D:\iCloud Photos' --cycle 2026-10-10
-& $iarchiveExe index --cycle 2026-10-10
-& $iarchiveExe audit --cycle 2026-10-10 --worker-project (Join-Path $PWD 'image-worker')
-& $iarchiveExe report --cycle 2026-10-10
-```
-
-The inventory commands above do not copy or prune E: bytes. Replication requires the separate commands and explicit artifact paths in the [replication guide](replication.md). Do not interpret local counts as remote library coverage.
+The [existing-archive section](workflows.md#use-the-workflow-with-an-existing-archive)
+explains source, replica, state and artifact paths and when to require physical
+independence. Local inventory counts and successful byte checks do not prove
+complete iCloud coverage.

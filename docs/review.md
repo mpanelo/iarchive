@@ -5,19 +5,22 @@ byte duplicates, visually similar images, dark-photo candidates, and explicit
 failures or unprocessed files. Source media stays unchanged. Decisions are notes
 in app state; they do not move, quarantine or delete files.
 
-## Start with a synthetic audit
+## Start a review session
 
-Build the updated checkout with `cargo build --release --locked`. After running
-the [synthetic demo](CLI.md#synthetic-scan-and-reports), use its state and cycle:
+For the complete sequence, follow the [end-to-end workflow](workflows.md).
+After its audit and replication steps, use the same executable, state and cycle
+variables from that guide:
+
+**macOS:**
 
 ```sh
-target/release/iarchive --state-dir .smoke/state review --cycle demo
+"$exe" --state-dir "$state" review --cycle "$cycle"
 ```
 
-For the Windows demo in the [CLI guide](CLI.md#windows-11-x64--powershell):
+**Windows:**
 
 ```powershell
-.\target\release\iarchive.exe --state-dir .smoke\windows-state review --cycle demo
+& $exe --state-dir $state review --cycle $cycle
 ```
 
 Open the **complete** `review_url` printed by the command, including everything
@@ -61,7 +64,7 @@ writer lock while running, so stop it before indexing, auditing, replicating or
 running another command that writes the same state. A dry run opens no server:
 
 ```sh
-target/release/iarchive --state-dir .smoke/state --dry-run review --cycle demo
+"$exe" --state-dir "$state" --dry-run review --cycle "$cycle"
 ```
 
 Keep app state outside media roots. Review notes do not automatically update

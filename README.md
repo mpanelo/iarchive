@@ -3,99 +3,121 @@
 [![Checks](https://github.com/mpanelo/iarchive/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mpanelo/iarchive/actions/workflows/ci.yml)
 [MIT license](LICENSE)
 
-A local command-line tool for taking inventory of photo archives and finding exact duplicates, visually similar images, and dark-photo candidates, with raw file replication and deep byte verification.
+Inventory, copy and verify local photo archives, then review duplicate and
+dark-photo candidates in a local browser gallery.
 
 > [!WARNING]
-> **Active development — experimental software.** Commands, report formats, and the state schema may change. Start with the synthetic demo below. Local inventory and image reports do not prove that an archive is fully backed up or that an iCloud library is completely downloaded.
+> **Active development — experimental software.** Commands, report formats and
+> the state schema may change. Start with the [synthetic walkthrough](docs/workflows.md).
+> Local verification does not prove complete iCloud coverage or authorize removal.
 
-iarchive works with files already on disk, including existing iCloud Photos downloads. It runs on macOS and Windows, keeps source media unchanged, and processes images locally without uploading them or collecting telemetry.
+iarchive works with files already on disk, including existing iCloud Photos
+downloads. It keeps source media unchanged, preserves distinct file variants,
+and processes images locally without uploads or telemetry. Review decisions are
+saved notes; they do not move or delete files.
 
 ## Features
 
-- Recursive file inventory with streaming SHA-256 hashes and exact-duplicate detection.
-- Image analysis for HEIC, JPEG, PNG, and other supported formats, with orientation-aware previews.
-- Perceptual similarity and brightness measurements that identify candidates for human review.
-- A loopback browser gallery with side-by-side previews and saved review notes.
-- SQLite state and scan caching to resume interrupted work and reuse unchanged results.
-- JSON reports and exportable JSON Lines manifests, with explicit findings for missing, partial, unsupported, and undecodable files.
-- Non-overwriting raw replication, uncached verification of both local copies, and standalone manifest/database backup bundles.
+- Recursive inventory, streaming SHA-256 and exact-duplicate detection.
+- Local image analysis, including HEIC/JPEG/PNG, orientation-aware previews,
+  perceptual similarity and dark-photo candidates for human review.
+- A loopback browser gallery with side-by-side previews and persistent
+  keep, flag and defer decisions.
+- Resumable SQLite state, scan caching, explicit file/decode findings and
+  exportable JSONL inventories.
+- Raw replication without overwriting conflicts or pruning extras, independent
+  byte verification of both roots, and recoverable database/manifest bundles.
 
-The implementation keeps source media read-only and writes copies only to an explicitly selected secondary directory. The browser gallery saves review decisions without moving media. Cloud authentication and downloads in the archive CLI, quarantine, and deletion are unavailable. Replication reports distinguish local byte equality from physical-drive independence; cloud coverage remains **NOT VERIFIED**. Synthetic two-drive replication checks have passed on Windows; real USB disconnect/reconnect testing remains outstanding. Duplicate and dark-photo candidates are suggestions for review, never deletion decisions.
+Cloud authentication/downloads in the archive CLI, quarantine, restore and
+permanent deletion are unavailable. Replication reports distinguish local byte
+equality from physical-drive independence; cloud coverage remains **NOT VERIFIED**.
 
 ## Getting started
 
-### Requirements
-
-- Stable Rust and Cargo. Windows builds also require the MSVC build tools.
-- [uv](https://docs.astral.sh/uv/) for the local image worker and demo; the worker uses Python 3.12–3.14.
-- Network access for the initial dependency installation.
-
-The Rust CLI can inventory files, hash them, and export manifests without the Python worker. Image analysis requires the worker environment. Rust manages state, paths, hashing, and reports; Python handles image decoding and measurements.
-
-### Build from source
+Clone in a writable directory of your choice, outside photo archives and synced
+folders:
 
 ```sh
 git clone https://github.com/mpanelo/iarchive.git
 cd iarchive
-uv sync --locked --project image-worker --group dev --python 3.12
-cargo build --release --locked
 ```
 
-Run commands from the repository root so the CLI can find `image-worker`. When running elsewhere, pass `--worker-project` to `audit` with the checkout's worker directory.
+Continue with the **[end-to-end workflow](docs/workflows.md)**. It includes
+Windows setup, macOS build commands, a fresh synthetic archive, and every
+available command in execution order:
 
-### Try the synthetic demo
-
-These commands generate a small library of artificial PNG, JPEG, and HEIC images, then inventory and analyze it. State, previews, and the exported manifest are stored separately from the demo media.
-
-```sh
-uv run --locked --project image-worker python fixtures/generate.py --output .smoke/demo-media --clean --with-heic
-target/release/iarchive --state-dir .smoke/demo-state import --source .smoke/demo-media --cycle demo
-target/release/iarchive --state-dir .smoke/demo-state index --cycle demo
-target/release/iarchive --state-dir .smoke/demo-state audit --cycle demo
-target/release/iarchive --state-dir .smoke/demo-state report --cycle demo
-target/release/iarchive --state-dir .smoke/demo-state export-manifest --cycle demo --output .smoke/demo-manifest.jsonl
+```text
+doctor → init → import → index → audit → report → export-manifest
+       → replication preview → replicate → review → stop review
+       → verify --deep → status
 ```
 
-The example uses macOS shell syntax. See the [Windows PowerShell instructions](docs/CLI.md#windows-11-x64--powershell) for Windows builds and commands.
+The guide uses one state directory and cycle throughout, explains expected
+results and failures, and shows how to adapt the paths for existing archives.
+Stop the gallery before running another command against its state. Final deep
+verification refreshes the backup bundles with saved review notes.
 
-Windows users, including Windows Home users, can use the [setup and test scripts](docs/windows-testing.md) from the repository root after cloning in a directory of their choice. Run `scripts\windows\setup.ps1` to detect existing prerequisites and install missing ones through WinGet, then `scripts\windows\test.ps1`. Project tools and caches stay in the checkout; prerequisite installers can change Windows outside it. The guide includes commands for running scripts with a process-only execution policy. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
+### Requirements and platforms
 
-`report` displays saved candidate groups, image measurements, errors, and preview paths. Open the preview JPEGs in a local image viewer, or run `review --cycle demo` with the same state directory and open its complete private URL. See the [review guide](docs/review.md). The fixture generator and manifest exporter refuse to overwrite existing destinations; use fresh paths when repeating the demo.
+- Rust/Cargo for source builds; Windows also needs MSVC C++ tools and a Windows SDK.
+- [uv](https://docs.astral.sh/uv/) and its managed Python 3.12–3.14 environment for
+  image analysis. Inventory, replication and verification work without the worker.
+- Internet access for initial dependency installation.
+
+macOS and Windows 11 x64, including Windows Home, are supported development
+platforms. The [Windows setup script](docs/windows-testing.md) detects compatible
+prerequisites, installs missing ones and builds the executable. Project tools
+and caches stay in the checkout; prerequisite installers can change Windows
+outside it. Directory scoping does not provide OS isolation.
+
+Synthetic two-drive replication and interruption/recovery checks have passed on
+Windows. The new gallery has been exercised in Firefox on macOS; Windows gallery
+runtime, physical USB disconnects and large-library performance remain untested.
+See the [build report](docs/build-report.md) for recorded checks and limits.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `doctor` | Check local tools, drive availability, and free space. |
-| `init` | Create local configuration and application state. |
-| `import` | Register an existing archive directory. |
-| `index` | Inventory files, compute hashes, and find exact duplicates. |
-| `audit` | Analyze images and save review candidates and previews. |
-| `status` | Show recorded scan and analysis status. |
-| `report` | Show saved findings and review candidates. |
-| `review` | Browse saved previews on loopback and record review decisions. |
-| `export-manifest` | Export inventory records to a JSON Lines file. |
-| `replicate` | Copy raw files without overwriting conflicts, then independently verify both roots. |
-| `verify --deep` | Rehash both roots against the frozen replica binding. |
+| `doctor` | Check local tools, drive availability and free space. |
+| `init` | Configure existing primary and optional secondary roots. |
+| `import` | Register an existing local archive under a cycle ID. |
+| `index` | Inventory files, hash them and find exact duplicates. |
+| `audit` | Analyze images and save candidates, findings and previews. |
+| `report` | Display saved image measurements and candidate groups. |
+| `export-manifest` | Export a versioned JSONL inventory outside media and state. |
+| `replicate` | Copy raw files without overwriting, then verify both roots. |
+| `review` | Browse saved previews on loopback and record review notes. |
+| `verify --deep` | Rehash both roots and publish fresh backup bundles. |
+| `status` | Show recorded state; no current media verification. |
 
-Use `--help` for command options, `--json` for compact machine-readable output, and `--dry-run` to preview operations without writes. Replication previews read and hash media to check conflicts and capacity. `index --deep` bypasses the hash cache. It still does not verify independent backups.
-
-Keep application state and generated output outside archive roots. See the [CLI reference](docs/CLI.md) for options, exit codes, state locations, and platform-specific examples.
+Use `--help` for options, `--json` for machine-readable reports, and `--dry-run`
+to preview writes. Replica previews read and hash media. `index --deep` bypasses
+the inventory cache; it does not replace two-root verification.
 
 ## Documentation
 
-- [Local workflows](docs/workflows.md)
-- [Browser review and saved decisions](docs/review.md)
-- [Replication, verification, and recovery](docs/replication.md)
-- [Safety and current limits](docs/safety.md)
+- **[End-to-end workflow](docs/workflows.md)** — start here for the full command chain.
+- [CLI reference](docs/CLI.md) — options, exit codes and developer commands.
+- [Browser review](docs/review.md) — decisions, previews and session behavior.
+- [Replication and recovery](docs/replication.md) — conflicts, drive identity and backups.
+- [Windows setup and testing](docs/windows-testing.md)
+- [Windows two-drive acceptance checks](docs/windows-two-drive-test.md)
+- [Safety and limits](docs/safety.md)
 - [Architecture](docs/architecture.md)
-- [Development tooling and checks](docs/development.md)
+- [Development tooling](docs/development.md)
 
 ## Contributing
 
-Bug reports and pull requests are welcome. [Open an issue](https://github.com/mpanelo/iarchive/issues) with reproduction steps, your operating system, and the relevant error output. Use synthetic examples and remove personal paths or account details from shared logs; please do not upload private media.
+Bug reports and pull requests are welcome. [Open an issue](https://github.com/mpanelo/iarchive/issues)
+with reproduction steps, your operating system and relevant error output. Use
+synthetic examples and remove personal paths or account details from shared logs;
+please do not upload private media.
 
-Before submitting a change, read the [development runbook](AGENTS.md) and follow the [tooling and checks guide](docs/development.md). Development and tests use synthetic fixtures and temporary directories. GitHub Actions runs the Rust and Python suites on macOS and Windows, plus dependency policy checks on Linux.
+Read the [development runbook](AGENTS.md) and [tooling guide](docs/development.md)
+before making changes. Tests use generated fixtures and temporary directories.
+GitHub Actions runs the Rust/Python suites on macOS and Windows and dependency
+policy checks on Linux. Keep dependency changes and their lockfiles together.
 
 ## License
 

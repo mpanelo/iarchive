@@ -6,9 +6,10 @@ to preserve modification times. It does not decode, convert, rename or filter
 files based on image-review candidates. Empty directories and filesystem metadata
 such as ACLs, extended attributes and alternate data streams are not archived.
 
-**Experimental:** start with synthetic files. Windows runtime and real USB
-disconnect/reconnect behavior still require testing for this implementation.
-These commands never approve cloud removal.
+**Experimental:** start with the [end-to-end synthetic workflow](workflows.md).
+Recorded Windows checks cover synthetic two-drive copying, recovery and process
+interruption. Real USB disconnect/reconnect behavior remains untested. These
+commands never approve cloud removal.
 
 ## Directory layout
 
@@ -32,41 +33,12 @@ Use `--secondary PATH`, or the secondary configured with `init`. Both artifact
 paths are explicit on every invocation. A missing root is treated as unavailable;
 the command does not recreate a disconnected media root.
 
-## Try local synthetic copies on macOS
+## Preview, copy and verify
 
-Run from the checkout after `cargo build --locked`. These are synthetic byte
-files; image decoding is not part of replication.
-
-```sh
-mkdir -p .smoke
-replica_demo=$(mktemp -d "$PWD/.smoke/replica-demo-XXXXXX")
-mkdir "$replica_demo/source" "$replica_demo/secondary" \
-  "$replica_demo/primary-artifacts" "$replica_demo/secondary-artifacts"
-mkdir "$replica_demo/source/nested"
-printf 'synthetic original\n' > "$replica_demo/source/photo.bin"
-printf 'synthetic metadata\n' > "$replica_demo/source/nested/photo.xmp"
-
-target/debug/iarchive --state-dir "$replica_demo/state" import \
-  --source "$replica_demo/source" --cycle demo
-
-target/debug/iarchive --state-dir "$replica_demo/state" --dry-run replicate \
-  --cycle demo --secondary "$replica_demo/secondary" \
-  --primary-artifacts "$replica_demo/primary-artifacts" \
-  --secondary-artifacts "$replica_demo/secondary-artifacts" \
-  --allow-unverified-devices
-
-target/debug/iarchive --state-dir "$replica_demo/state" replicate \
-  --cycle demo --secondary "$replica_demo/secondary" \
-  --primary-artifacts "$replica_demo/primary-artifacts" \
-  --secondary-artifacts "$replica_demo/secondary-artifacts" \
-  --allow-unverified-devices
-
-target/debug/iarchive --state-dir "$replica_demo/state" verify --deep \
-  --cycle demo --secondary "$replica_demo/secondary" \
-  --primary-artifacts "$replica_demo/primary-artifacts" \
-  --secondary-artifacts "$replica_demo/secondary-artifacts" \
-  --allow-unverified-devices
-```
+The [end-to-end workflow](workflows.md#6-preview-replication-then-copy) provides
+Windows and macOS commands using one cycle and a consistent directory layout.
+It covers dry-run preflight, copying, review and final deep verification, including
+the explicit acknowledgment needed for a same-volume byte-only demo.
 
 The dry run reads and hashes files to calculate missing bytes and detect conflicts;
 it writes no media, state, progress or reports. Read results from the console.
@@ -92,8 +64,8 @@ After those tests pass, follow the [Windows two-drive acceptance plan](windows-t
 Its script creates a fresh synthetic source on one drive and an empty replica on
 the other, checks independent PowerShell hashes and restores state from each
 drive's backup. It also checks conflicts, missing files and unavailable roots,
-with an optional process-interruption/resume check. Do not reuse the test script's
-completed fixture: it includes deliberately invalid files.
+with a separate required process-interruption/resume check. Do not reuse the
+test script's completed fixture: it includes deliberately invalid files.
 
 Windows binds volume GUIDs and root file identities. Native read-only queries
 accept distinct disk extents only when drivers report ATA, USB, SATA or NVMe
