@@ -45,7 +45,7 @@ uv run --locked --project image-worker python fixtures/generate.py --output .smo
 
 Omitting `--clean` includes intentionally corrupt HEIC, unsupported RAW, unknown bytes, video dummy bytes, an empty JPEG, and a `.partial` file. Inventory/audit then report incomplete results and exit 2 as expected. These bytes are synthetic, not genuine videos/RAW. Existing fixture directories and manifest filenames are never overwritten.
 
-`report` shows saved candidate groups, per-image measurements and preview paths, decode/file errors, and status. Open preview JPEGs from the reported thumbnail cache with a local image viewer. There is no browser gallery in this build.
+`report` shows saved candidate groups, per-image measurements and preview paths, decode/file errors, and status. Open preview JPEGs from the reported thumbnail cache with a local image viewer. Use `review --cycle demo` with the same state directory to browse them and save review notes; see [browser review](review.md).
 
 ## Options and exit codes
 
@@ -59,6 +59,7 @@ All commands have `--help`, global `--state-dir`, `--json`, and `--dry-run`. Dry
 - `replicate --cycle ID --secondary PATH --primary-artifacts PATH --secondary-artifacts PATH`: non-overwriting raw copy and independent uncached hashing of both roots. Existing roots and separate artifact directories are required; see [replication](replication.md).
 - `verify --cycle ID --deep --secondary PATH --primary-artifacts PATH --secondary-artifacts PATH`: independently rehash the frozen file set without copying media. Both commands require `--allow-unverified-devices` when physical independence cannot be proved; acknowledgment does not verify independence.
 - `status --cycle ID`, `report --cycle ID`: view recorded state/results; no fresh verification.
+- `review --cycle ID [--port 0]`: serve saved candidates/previews on `127.0.0.1` and record review notes in SQLite. Open the complete printed URL and stop with Ctrl+C. The state lock stays held until shutdown; stop review before running another state-writing command. A dry run opens no listener and saves no decisions.
 - `doctor [--primary PATH] [--secondary PATH]`: free space, availability, optional uv/ffprobe/icloudpd checks and default worker probe. It does not install anything or prove physical disks distinct.
 
 Exit 0 = requested operation completed (not a backup-safety claim). Exit 1 = invocation/config/state/process error. Exit 2 = completed report with incomplete inventory/visual audit/replica checks or unavailable requested drive. A mixed library with videos can be indexed successfully while its visual audit remains incomplete.
@@ -76,7 +77,7 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "& '.\scripts\w
 
 Omit `-ExternalDrives` for local tests only. Clone in a directory of your choice, then run the scripts from the resulting `iarchive` checkout; tools and caches stay inside it. Setup automatically reuses compatible prerequisites and installs missing ones through WinGet; prerequisite installers can change Windows outside the checkout. Use `-SkipPrerequisites` to check without installing. This layout works on Windows Home; directory scoping does not provide OS isolation. External tests write generated fixtures only under each selected volume's `iarchive-sandbox\run-<id>` directory; they never scan your archive.
 
-Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI; real external-drive workflows still need separate runtime checks.
+Install stable Rust with the MSVC build tools and uv, then build and validate the checkout. Windows checks run in CI. The recorded synthetic two-drive tests passed; new gallery behavior and physical USB disconnects still need separate runtime checks.
 
 ```powershell
 uv sync --locked --project image-worker --group dev --python 3.12

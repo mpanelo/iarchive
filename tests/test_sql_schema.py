@@ -13,12 +13,14 @@ class SchemaTests(unittest.TestCase):
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript((ROOT / "crates/iarchive-store/src/schema.sql").read_text())
         self.db.executescript((ROOT / "crates/iarchive-store/src/replica.sql").read_text())
+        self.db.executescript((ROOT / "crates/iarchive-store/src/review.sql").read_text())
 
     def tearDown(self):
         self.db.close()
 
     def test_embedded_sql_compiles(self):
-        source = (ROOT / "crates/iarchive-store/src/lib.rs").read_text()
+        source = "\n".join(path.read_text() for path in
+                           (ROOT / "crates/iarchive-store/src").glob("*.rs"))
         queries = re.findall(r'"((?:SELECT|INSERT|UPDATE|DELETE) [^"\n]*)"', source)
         self.assertTrue(queries, "No embedded SQL was extracted")
         for query in queries:

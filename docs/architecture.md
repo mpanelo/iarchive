@@ -2,7 +2,7 @@
 
 ## Scope and crate boundaries
 
-The implementation uses four workspace crates. The binary package is `iarchive` in `crates/iarchive-cli`; libraries are `iarchive-core`, `iarchive-store`, and `iarchive-fs`. Cloud operations and review decisions are not implemented. `CloudProvider` exposes inventory only and its supplied implementation returns an error. There is no destructive provider method or CLI route.
+The implementation uses four workspace crates. The binary package is `iarchive` in `crates/iarchive-cli`; libraries are `iarchive-core`, `iarchive-store`, and `iarchive-fs`. Cloud operations are not implemented. The CLI includes an embedded local review gallery and review-note storage; it has no media-action implementation. `CloudProvider` exposes inventory only and its supplied implementation returns an error. There is no destructive provider method or CLI route.
 
 Rust 2024 with a declared minimum Rust 1.85, bundled rusqlite, serde/TOML, clap, tracing, walkdir, fs2, SHA-256, and Unicode NFC normalization are the selected libraries. Committed lockfiles record the resolved dependencies. The declared minimum compiler version still needs a separate compatibility check; current CI validates stable Rust.
 
@@ -10,7 +10,7 @@ Rust 2024 with a declared minimum Rust 1.85, bundled rusqlite, serde/TOML, clap,
 
 ## State and resuming
 
-SQLite schema version 1 creates cycles, scan runs, file facts, analysis, candidates, memberships, issues, and transactional transition history. Version 2 adds frozen replica bindings, replica runs and per-file copy progress through a transactional migration; JSONL schemas remain version 1. Foreign keys and WAL are enabled. An advisory lock serializes CLI writers. A newer DB schema is rejected. Status shows last recorded state, not live filesystem assurance.
+SQLite schema version 1 creates cycles, scan runs, file facts, analysis, candidates, memberships, issues, and transactional transition history. Version 2 adds frozen replica bindings, replica runs and per-file copy progress through a transactional migration. Version 3 adds append-only review decisions and their recorded group snapshots; JSONL schemas remain version 1. Foreign keys and WAL are enabled. An advisory lock serializes CLI writers. A newer DB schema is rejected. Status shows last recorded state, not live filesystem assurance.
 
 Existing downloads enter `IMPORTED`, not `DOWNLOADED`: this app has no evidence that iPhone sync or remote download coverage completed. A scan first records `INDEXING` and invalidates prior completion/candidates. Each completed file is committed independently, so an interrupted run can reuse unchanged path/size/nanosecond-mtime hashes. Missing records are marked only after a complete traversal; interrupted traversals do not invent missing files. Errors and retained missing records prevent completion. Restoring a missing file and rerunning can recover completion; accepting a changed snapshot requires a separate cycle, not silently dropping its history.
 
@@ -68,3 +68,36 @@ Audit refreshes membership before analysis and deeply hashes every image before/
 - Source directories are not OS snapshots. Pause concurrent downloader/file edits for a stable scan. Checks resist ordinary path escapes, but do not claim a sandbox against an adversarial process racing directory replacements. Future high-risk actions require stronger stable handles and revalidation.
 - The collision key uses NFC plus Unicode lowercase, an approximation of native filesystem equivalence. Additional platform-specific name equivalences are not fully modeled. Doctor/audit refuse a media root containing the system temp directory, where subprocess capture files would otherwise touch that root.
 - Multi-frame images are not yet fully analyzed; the decoder rejects them rather than claiming the whole container was visually scanned.
+
+## Browser review
+
+The CLI embeds HTML/CSS/JavaScript and uses Axum 0.8 with a Tokio current-thread
+runtime. It binds an ephemeral IPv4 loopback port unless `--port` is specified;
+there is no host option. The complete printed URL carries a random 256-bit
+session token in its fragment. JavaScript sends it in an Authorization header,
+including thumbnail fetches; it is never a cookie or a filesystem-path argument.
+Host and Origin checks, no CORS, no-store responses, a restrictive CSP and a
+16 KiB JSON body limit constrain the browser interface. This uses Axum's
+[serve API](https://docs.rs/axum/0.8.9/axum/fn.serve.html) and
+[body limit](https://docs.rs/axum/0.8.9/axum/extract/struct.DefaultBodyLimit.html).
+
+A session holds the existing exclusive state lock. SQLite requests use one
+mutex-protected writer; another index/audit/replica command is refused until
+review stops. The view materializes saved groups and findings; the browser
+renders 12 groups per page. Large-library gallery performance remains untested.
+Thumbnail IDs are allowlisted from this cycle's groups/findings, including
+explicit cross-cycle members. Originals are never served or read by the gallery.
+Each preview checks cache containment and link/reparse ancestors, opens the leaf
+without following links, caps reads at 8 MiB and checks JPEG markers. A missing
+or invalid preview is unavailable, never silently replaced with original media.
+
+Decisions record keep-all, flag-selected, defer or reset. Selected IDs must be
+unique members of the current group. A SHA-256 fingerprint binds the cycle, scan,
+candidate ID/type/version/explanation and all recorded member metadata/features,
+including cross-cycle scan IDs. Reaudit/reindex changes the binding even when
+SQLite reuses candidate IDs. Earlier decisions and snapshots remain in SQLite;
+reset appends a new entry and clears the current view without erasing history.
+Decisions do not change cycle/replica completion or imply file relationships.
+The gallery does not rehash media, and its recorded SHA-256 is not current
+verification. Whole-database replica backups capture decisions present when
+created; review writes do not refresh already exported bundles.

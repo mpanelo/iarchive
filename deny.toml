@@ -15,7 +15,11 @@ yanked = "deny"
 allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.93
 # Existing transitive dependency of directories; keep the allowance crate-specific.
-exceptions = [{ crate = "option-ext", allow = ["MPL-2.0"] }]
+exceptions = [
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+    # Axum's router uses matchit, licensed MIT AND BSD-3-Clause.
+    { crate = "matchit", allow = ["BSD-3-Clause"] },
+]
 
 [bans]
 multiple-versions = "warn"

@@ -15,11 +15,12 @@ iarchive works with files already on disk, including existing iCloud Photos down
 - Recursive file inventory with streaming SHA-256 hashes and exact-duplicate detection.
 - Image analysis for HEIC, JPEG, PNG, and other supported formats, with orientation-aware previews.
 - Perceptual similarity and brightness measurements that identify candidates for human review.
+- A loopback browser gallery with side-by-side previews and saved review notes.
 - SQLite state and scan caching to resume interrupted work and reuse unchanged results.
 - JSON reports and exportable JSON Lines manifests, with explicit findings for missing, partial, unsupported, and undecodable files.
 - Non-overwriting raw replication, uncached verification of both local copies, and standalone manifest/database backup bundles.
 
-The implementation keeps source media read-only and writes copies only to an explicitly selected secondary directory. Cloud authentication and downloads in the archive CLI, a browser gallery, quarantine, and deletion are unavailable. Replication reports distinguish local byte equality from physical-drive independence; cloud coverage remains **NOT VERIFIED**. Windows runtime and real USB recovery checks for replication remain outstanding. Duplicate and dark-photo candidates are suggestions for review, never deletion decisions.
+The implementation keeps source media read-only and writes copies only to an explicitly selected secondary directory. The browser gallery saves review decisions without moving media. Cloud authentication and downloads in the archive CLI, quarantine, and deletion are unavailable. Replication reports distinguish local byte equality from physical-drive independence; cloud coverage remains **NOT VERIFIED**. Synthetic two-drive replication checks have passed on Windows; real USB disconnect/reconnect testing remains outstanding. Duplicate and dark-photo candidates are suggestions for review, never deletion decisions.
 
 ## Getting started
 
@@ -59,7 +60,7 @@ The example uses macOS shell syntax. See the [Windows PowerShell instructions](d
 
 Windows users, including Windows Home users, can use the [setup and test scripts](docs/windows-testing.md) from the repository root after cloning in a directory of their choice. Run `scripts\windows\setup.ps1` to detect existing prerequisites and install missing ones through WinGet, then `scripts\windows\test.ps1`. Project tools and caches stay in the checkout; prerequisite installers can change Windows outside it. The guide includes commands for running scripts with a process-only execution policy. Add `-ExternalDrives 'D:', 'E:'` to test generated fixtures in fresh directories on those drives.
 
-`report` displays saved candidate groups, image measurements, errors, and preview paths. Open the preview JPEGs in a local image viewer. The fixture generator and manifest exporter refuse to overwrite existing destinations; use fresh paths when repeating the demo.
+`report` displays saved candidate groups, image measurements, errors, and preview paths. Open the preview JPEGs in a local image viewer, or run `review --cycle demo` with the same state directory and open its complete private URL. See the [review guide](docs/review.md). The fixture generator and manifest exporter refuse to overwrite existing destinations; use fresh paths when repeating the demo.
 
 ## Commands
 
@@ -72,6 +73,7 @@ Windows users, including Windows Home users, can use the [setup and test scripts
 | `audit` | Analyze images and save review candidates and previews. |
 | `status` | Show recorded scan and analysis status. |
 | `report` | Show saved findings and review candidates. |
+| `review` | Browse saved previews on loopback and record review decisions. |
 | `export-manifest` | Export inventory records to a JSON Lines file. |
 | `replicate` | Copy raw files without overwriting conflicts, then independently verify both roots. |
 | `verify --deep` | Rehash both roots against the frozen replica binding. |
@@ -83,6 +85,7 @@ Keep application state and generated output outside archive roots. See the [CLI 
 ## Documentation
 
 - [Local workflows](docs/workflows.md)
+- [Browser review and saved decisions](docs/review.md)
 - [Replication, verification, and recovery](docs/replication.md)
 - [Safety and current limits](docs/safety.md)
 - [Architecture](docs/architecture.md)

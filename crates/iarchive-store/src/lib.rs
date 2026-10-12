@@ -4,12 +4,17 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+mod review;
+pub use review::{
+    ReviewAction, ReviewDecision, ReviewFile, ReviewGroup, ReviewInput, ReviewSnapshot,
+};
+
 pub struct Store {
     pub connection: Connection,
 }
 pub type ExactMember = (i64, String, String);
 pub type ExactGroup = Vec<ExactMember>;
-const STORE_SCHEMA_VERSION: u32 = 2;
+const STORE_SCHEMA_VERSION: u32 = 3;
 
 fn nonnegative_integer(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(column)?;
@@ -66,9 +71,15 @@ impl Store {
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
         }
-        if version < STORE_SCHEMA_VERSION {
+        if version < 2 {
             let tx = connection.transaction()?;
             tx.execute_batch(include_str!("replica.sql"))?;
+            tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
+        }
+        if version < 3 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("review.sql"))?;
             tx.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
             tx.commit()?;
         }
@@ -552,63 +563,73 @@ mod tests {
 
     #[test]
     fn legacy_state_migrates_without_losing_inventory() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db.sqlite");
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch(include_str!("schema.sql"))
-            .unwrap();
-        connection.pragma_update(None, "user_version", 1).unwrap();
-        connection
-            .execute(
-                "INSERT INTO archive_cycle(id,source_root) VALUES('legacy','synthetic-root')",
-                [],
-            )
-            .unwrap();
-        drop(connection);
-        assert_eq!(
-            Store::open_readonly(&path)
-                .unwrap()
-                .status("legacy")
-                .unwrap()
-                .replica_state,
-            None
-        );
-        let mut store = Store::open(&path).unwrap();
-        assert_eq!(
-            store.root("legacy").unwrap(),
-            PathBuf::from("synthetic-root")
-        );
-        let first = store.begin_replica("legacy", "replicate").unwrap();
-        assert_eq!(
-            store.status("legacy").unwrap().replica_state.as_deref(),
-            Some("RUNNING")
-        );
-        store
-            .begin_publication("legacy", first, "{\"complete\":false}")
-            .unwrap();
-        drop(store);
-        let mut store = Store::open(&path).unwrap();
-        assert_eq!(
-            store.status("legacy").unwrap().replica_state.as_deref(),
-            Some("PUBLISHING")
-        );
-        let second = store.begin_replica("legacy", "replicate").unwrap();
-        assert!(second > first);
-        let interrupted: String = store
-            .connection
-            .query_row(
-                "SELECT state FROM replica_run WHERE id=?1",
-                [first],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(interrupted, "INTERRUPTED");
-        store.finish_replica("legacy", second, false, "{}").unwrap();
-        assert_eq!(
-            store.status("legacy").unwrap().replica_state.as_deref(),
-            Some("INCOMPLETE")
-        );
+        for version in [1, 2] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("db.sqlite");
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(include_str!("schema.sql"))
+                .unwrap();
+            if version == 2 {
+                connection
+                    .execute_batch(include_str!("replica.sql"))
+                    .unwrap();
+            }
+            connection
+                .pragma_update(None, "user_version", version)
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO archive_cycle(id,source_root) VALUES('legacy','synthetic-root')",
+                    [],
+                )
+                .unwrap();
+            drop(connection);
+            assert_eq!(
+                Store::open_readonly(&path)
+                    .unwrap()
+                    .status("legacy")
+                    .unwrap()
+                    .replica_state,
+                None
+            );
+            let mut store = Store::open(&path).unwrap();
+            assert_eq!(
+                store.root("legacy").unwrap(),
+                PathBuf::from("synthetic-root")
+            );
+            assert!(store.review_snapshot("legacy").unwrap().groups.is_empty());
+            let first = store.begin_replica("legacy", "replicate").unwrap();
+            assert_eq!(
+                store.status("legacy").unwrap().replica_state.as_deref(),
+                Some("RUNNING")
+            );
+            store
+                .begin_publication("legacy", first, "{\"complete\":false}")
+                .unwrap();
+            drop(store);
+            let mut store = Store::open(&path).unwrap();
+            assert_eq!(
+                store.status("legacy").unwrap().replica_state.as_deref(),
+                Some("PUBLISHING")
+            );
+            let second = store.begin_replica("legacy", "replicate").unwrap();
+            assert!(second > first);
+            let interrupted: String = store
+                .connection
+                .query_row(
+                    "SELECT state FROM replica_run WHERE id=?1",
+                    [first],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(interrupted, "INTERRUPTED");
+            store.finish_replica("legacy", second, false, "{}").unwrap();
+            assert_eq!(
+                store.status("legacy").unwrap().replica_state.as_deref(),
+                Some("INCOMPLETE")
+            );
+        }
     }
 
     #[test]

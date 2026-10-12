@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iarchive · Local review</title>
+  <link rel="stylesheet" href="/review.css">
+  <script src="/review.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><span class="brand">iarchive<span>local review</span></span><span class="badge">Media stays unchanged</span></header>
+  <main>
+    <section class="intro"><p class="eyebrow">YOUR ARCHIVE, YOUR DECISIONS</p><h1>Review with context.</h1><p>Compare saved previews and findings. Keep a group, flag selected files for later, or leave the decision open.</p></section>
+    <div id="message" role="status" aria-live="polite">Loading your saved audit…</div>
+    <section id="workspace" hidden>
+      <div class="summary"><div><span class="eyebrow">ARCHIVE CYCLE</span><h2 id="cycle"></h2><p id="audit-status"></p></div><div class="summary-notes"><p>Flags are review notes. They do not move or delete files.</p><p id="history"></p></div></div>
+      <nav id="filters" aria-label="Review categories"></nav>
+      <div class="list-heading"><h2 id="list-title">All candidates</h2><span id="list-count"></span></div>
+      <div id="groups"></div>
+      <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+      <aside class="limits"><h2>What this review tells you</h2><p>These are saved audit observations. A preview or a review decision does not verify the current files, their backups, or complete iCloud coverage. Related originals, edits and Live Photo parts stay separate until metadata proves their relationship.</p><p>Cloud coverage: NOT VERIFIED. Stop this server before indexing or auditing again.</p></aside>
+    </section>
+  </main>
+  <footer>Local previews. No uploads. No automatic removal.</footer>
+</body>
+</html>

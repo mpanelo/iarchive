@@ -1,5 +1,6 @@
 mod operations;
 mod replication;
+mod review;
 mod worker;
 
 use anyhow::{Context, Result, ensure};
@@ -99,6 +100,17 @@ enum Commands {
         #[arg(long)]
         cycle: String,
     },
+    /// Browse saved audit candidates and record decisions; never move media.
+    Review {
+        #[arg(long)]
+        cycle: String,
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "Loopback port; 0 selects an available port"
+        )]
+        port: u16,
+    },
     /// Copy a frozen raw file set without overwriting, then independently verify both roots.
     Replicate(replication::Args),
     /// Independently rehash both roots against the frozen replica binding; never copy media.
@@ -163,6 +175,9 @@ fn state_dir(cli: &Cli) -> Result<PathBuf> {
                 .map(|p| p.data_local_dir().to_owned())
         })
         .context("cannot determine app-state directory; use --state-dir")?;
+    if matches!(cli.command, Commands::Review { .. }) {
+        review::reject_links(&p)?;
+    }
     absolute_destination(&p)
 }
 
@@ -354,6 +369,7 @@ fn run(cli: &Cli) -> Result<bool> {
         | Commands::Index { cycle, .. }
         | Commands::ExportManifest { cycle, .. }
         | Commands::Audit { cycle, .. }
+        | Commands::Review { cycle, .. }
         | Commands::Report { cycle } => cycle,
         Commands::Replicate(args) | Commands::Verify { args, .. } => &args.cycle,
         _ => unreachable!(),
@@ -423,6 +439,7 @@ fn run(cli: &Cli) -> Result<bool> {
             *cache_limit_mib,
         ),
         Commands::Report { .. } => operations::report(cli, &store, cycle),
+        Commands::Review { port, .. } => review::run(cli, store, &state, cycle, *port),
         _ => unreachable!(),
     }
 }

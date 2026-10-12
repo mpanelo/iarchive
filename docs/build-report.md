@@ -33,6 +33,35 @@ two drives. They do not test USB disconnects, graceful Ctrl+C, a large library,
 PowerShell 7 on this machine, completed iPhone uploads or iCloud coverage.
 Raw reports and generated files remain local and are not tracked in Git.
 
+## Local gallery checks — 2026-10-11
+
+The new `review` command serves saved audit candidates and cached JPEG previews
+only on IPv4 loopback. Keep-all, flag-selected, defer and reset append review
+notes to SQLite without moving media or changing replica completion. Recorded
+scan/group/member fingerprints reject stale selections and retain older history.
+
+All 38 Rust tests passed on macOS with the Python worker required. New coverage
+checks persistence across restarts, version 1/2 database migration, stale and
+out-of-group selections, exclusive state locking, Host/Origin/session checks,
+bounded bodies, allowlisted previews, traversal and linked thumbnail refusal.
+Formatting and workspace Clippy passed with warnings treated as errors. All 28
+image-worker, three repository and 62 offline cloud-probe tests passed, and the
+JavaScript syntax check passed. cargo-deny passed with a reviewed crate-specific
+BSD-3-Clause allowance for Axum's `matchit` router; existing `syn`/`winnow`
+duplicate warnings remain.
+
+Firefox on macOS rendered the generated JPEG/HEIC previews side by side. Saving
+a selected-file flag updated the group and Reviewed filter; the failure filter
+showed a corrupt HEIC and unknown file explicitly. All 11 synthetic source file
+hashes and timestamps remained unchanged. The synthetic review server stopped
+cleanly with Ctrl+C. Raw test data stays outside tracked files.
+
+The earlier Windows replication results do not verify this new gallery.
+Windows gallery runtime, large-library gallery performance and minimum-compiler
+compatibility remain untested. The browser pages 12 groups at a time, while the
+API materializes saved groups/findings. See [browser review](review.md) for usage,
+state locking and the limits of review notes.
+
 ## Windows acceptance script checks — 2026-10-11
 
 Replica database backups now retain their writable creation handle until SQLite
