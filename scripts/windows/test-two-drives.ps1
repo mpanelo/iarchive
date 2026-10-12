@@ -6,18 +6,11 @@ Run synthetic cross-drive copy, verification, recovery and failure checks.
 Writable drive root, such as D:. Only fresh marked test directories are used.
 .PARAMETER SecondaryDrive
 Another drive root, such as E:. Windows must report a distinct backing disk.
-.PARAMETER TestInterruption
-Also terminate the script's own copy process while a generated partial is growing,
-then resume and verify it. Does not unplug, unmount or disconnect a drive.
-.PARAMETER InterruptionMiB
-Size of the optional generated binary file; increase if the copy is too fast.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$PrimaryDrive,
-    [Parameter(Mandatory = $true)][string]$SecondaryDrive,
-    [switch]$TestInterruption,
-    [ValidateRange(64, 2048)][int]$InterruptionMiB = 512
+    [Parameter(Mandatory = $true)][string]$SecondaryDrive
 )
 
 Set-StrictMode -Version Latest
@@ -37,7 +30,6 @@ $summary = [ordered]@{
     primary_run = $null
     secondary_run = $null
     checks = $null
-    interruption = [pscustomobject]@{ status = 'NOT REQUESTED' }
 }
 Push-Location $repoRoot
 try {
@@ -75,10 +67,6 @@ try {
     [IO.File]::WriteAllBytes((Join-Path $source 'synthetic.xyz'), [byte[]]@(1, 2, 3))
     [IO.File]::WriteAllBytes((Join-Path $source 'synthetic-empty.bin'), [byte[]]@())
     $summary.checks = Invoke-ReplicaAcceptance $exe $source $secondary $primaryArtifacts $secondaryArtifacts $state $reports "drive-$runId"
-    if ($TestInterruption) {
-        $summary.interruption = [pscustomobject]@{ status = 'FAILED'; fixture_mib = $InterruptionMiB }
-        $summary.interruption = Invoke-ReplicaInterruption $exe $primaryRun $secondaryRun $state $reports "interrupt-$runId" $InterruptionMiB
-    }
     $summary.passed = $true
     Write-JsonFile (Join-Path $runRoot 'summary.json') $summary
     Write-Host "PASS. Results: $runRoot\summary.json"

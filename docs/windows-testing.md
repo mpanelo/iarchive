@@ -172,8 +172,9 @@ unplug or unmount a drive. USB disconnect/reconnect behavior needs a separate
 manual test. The generated same-volume replicas prove only local byte copying,
 not independent physical backups. The script explicitly acknowledges that limit.
 Follow the [Windows two-drive acceptance plan](windows-two-drive-test.md)
-to run `test-two-drives.ps1` between two physical drives, check backup recovery
-and exercise failures using fresh synthetic files. Real archive replication and
+to run both `test-two-drives.ps1` and `test-two-drive-interruption.ps1` between
+two physical drives. Both must pass, covering backup recovery, failure handling,
+and interrupted copy/resume using fresh synthetic files. Real archive replication and
 cloud coverage are not established by these tests.
 
 ## 5. Read the results

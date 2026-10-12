@@ -120,6 +120,25 @@ function Invoke-ReplicaAcceptance {
     } finally {
         Move-Item -LiteralPath $unavailable -Destination $Secondary
     }
+    $restored = Invoke-IarchiveJson $Exe $State $Reports 'restored-verify' (@('verify', '--deep') + $replicaArgs) @(0, 2)
+    $finalCycle = $Cycle
+    $identityChanged = $false
+    if (-not $restored.complete) {
+        # exFAT can change a directory file ID when it is renamed away and back.
+        # Preserve the old binding and accept only its explicit identity refusal.
+        Assert-Check (@($restored.issues).Count -eq 1 -and $restored.issues[0] -eq 'source or bound secondary root/volume changed; no media was read') 'Restored root failed for a reason other than its identity.'
+        Assert-Check ($restored.verified_files -eq 0 -and $restored.copied_files -eq 0) 'Changed root identity was accepted.'
+        $identityChanged = $true
+        Assert-UnchangedSnapshot $Source $before
+        $restoredBytes = ConvertTo-Json -InputObject @(Get-SyntheticSnapshot $Secondary | Select-Object path, bytes, sha256) -Compress
+        Assert-Check ($restoredBytes -eq $expectedBytes) 'Restored replica bytes differ.'
+        $finalCycle = "$Cycle-restored"
+        Write-Host 'Restored directory identity changed; verifying in a fresh cycle.'
+        $null = Invoke-ReplicaCommand 'restored-import' @('import', '--source', $Source, '--cycle', $finalCycle)
+        $replicaArgs[1] = $finalCycle
+    } else {
+        Assert-ReplicaComplete $restored $before.Count
+    }
     $final = Invoke-ReplicaCommand 'final-verify' (@('verify', '--deep') + $replicaArgs)
     Assert-ReplicaComplete $final $before.Count
     Assert-UnchangedSnapshot $Source $before
@@ -130,6 +149,8 @@ function Invoke-ReplicaAcceptance {
         secondary = $Secondary
         independent_physical_drives = $final.independent_physical_drives
         recovery_backups = $number
+        restored_identity_changed = $identityChanged
+        final_cycle = $finalCycle
         final_report = (Join-Path $Reports 'final-verify.json')
     }
 }

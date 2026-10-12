@@ -194,7 +194,7 @@ function Assert-UnchangedSnapshot {
 
 function Invoke-IarchiveJson {
     param([string]$Exe, [string]$State, [string]$Reports, [string]$Name,
-        [string[]]$ArgumentList, [int]$ExpectedExit = 0)
+        [string[]]$ArgumentList, [int[]]$ExpectedExit = @(0))
     Write-Host "> iarchive $($ArgumentList -join ' ') (expected exit $ExpectedExit)"
     $lines = @(& $Exe --state-dir $State --json @ArgumentList)
     $code = $LASTEXITCODE
@@ -205,9 +205,9 @@ function Invoke-IarchiveJson {
     } else {
         [IO.File]::WriteAllText($reportPath, $raw, [Text.UTF8Encoding]::new($false))
     }
-    Assert-Check ($code -eq $ExpectedExit) "iarchive $Name returned $code; expected $ExpectedExit. See $Reports."
+    Assert-Check ($code -in $ExpectedExit) "iarchive $Name returned $code; expected $ExpectedExit. See $Reports."
     if ([string]::IsNullOrWhiteSpace($raw)) {
-        Assert-Check ($ExpectedExit -ne 0) "iarchive $Name emitted no JSON."
+        Assert-Check ($code -ne 0) "iarchive $Name emitted no JSON."
         return $null
     }
     return $raw | ConvertFrom-Json
