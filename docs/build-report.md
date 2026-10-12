@@ -1,13 +1,48 @@
 # Build and test report
 
+## Windows two-drive results — 2026-10-11
+
+The user ran the scripts separately on Windows with PowerShell 5.1.26100.9444.
+Both drive tests recorded commit `c3a418ffab1341ffe168989f525372a2b8e167d9`.
+The source drive D: uses NTFS; the secondary drive E: uses exFAT. Both tests
+reported distinct physical backing disks through Windows topology discovery.
+
+| Check | Result |
+| --- | --- |
+| Automated checks | `passed: true`, `automated_checks: PASSED`; smoke tests passed on C:, D: and E:. The summary does not retain individual test counts. |
+| Copy and repeat run | All 12 files copied and verified; the repeat run copied zero files. |
+| Backup recovery | Both drive backups recovered into separate state directories and verified all 12 files. |
+| Corruption and conflict | One hash mismatch blocked completion; replication retained the conflicting file and copied nothing. |
+| Missing file | Verification rejected one missing file; replication recopied it and verified all 12 files. |
+| Unavailable root | Verification rejected the missing root. Restoring the exFAT folder changed its identity; the old cycle rejected it, and a fresh cycle verified all 12 files. |
+| Interruption and resume | The 512 MiB copy was stopped after observing a 10 MiB partial. Saved status remained `RUNNING` and `NOT VERIFIED`. Resume copied and verified the file; a separate deep verification passed. |
+
+Both drive-test summaries show `passed: true`; the interruption summary also
+shows `interruption.status: PASSED`. Final reports have no issues, missing files
+or hash mismatches. The successful scripts also checked independent hashes,
+unchanged source bytes and timestamps, and the retained partial's unchanged hash.
+
+Local evidence is retained beneath these checkout-relative directories:
+
+- `.smoke/windows-369ce8fb6d6740a68b9d5c77b5db9ad7/`
+- `.smoke/two-drive-b583cc97b7f846c19693aaabd4ca891a/`
+- `.smoke/two-drive-interruption-6b4e4d894808465bbd29f354844737cf/`
+
+These results establish Windows runtime behavior with synthetic files on these
+two drives. They do not test USB disconnects, graceful Ctrl+C, a large library,
+PowerShell 7 on this machine, completed iPhone uploads or iCloud coverage.
+Raw reports and generated files remain local and are not tracked in Git.
+
 ## Windows acceptance script checks — 2026-10-11
 
 Replica database backups now retain their writable creation handle until SQLite
 finishes, then flush that handle. The previous read-only reopen cannot satisfy
 Windows' flush access requirements and is the likely cause of the two failed
 replication tests in the published Windows run. Failed exit-code assertions now
-include stdout JSON as well as stderr. A Windows rerun is still required to
-confirm the reported CI failure is resolved.
+include stdout JSON as well as stderr. At the time of these earlier checks,
+a Windows rerun was still required to confirm the reported CI failure was
+resolved. The later results above confirm local Windows backup recovery;
+they do not establish the outcome of that CI run.
 
 The two-drive guide now uses `scripts/windows/test-two-drives.ps1` for synthetic
 copying, independent hashes, bundle recovery and failure handling. Three shared
@@ -46,10 +81,11 @@ SQLite's backup feature is enabled without changing its resolved version.
 
 The Windows filesystem crate and its test targets passed a cross-target compile
 and Clippy check. This is **not Windows runtime verification**. PowerShell smoke
-changes are prepared for both CI shells but have not run on this host. Windows
-runtime, physical USB disconnect/reconnect and a large-library benchmark remain
-outstanding. The [Windows two-drive acceptance plan](windows-two-drive-test.md)
-provides the next manual checks; it has not been executed on Windows. See
+changes were prepared for both CI shells but had not run on that macOS host.
+The later Windows results above cover synthetic two-drive behavior. Physical USB
+disconnect/reconnect and a large-library benchmark remain outstanding.
+The [Windows two-drive acceptance plan](windows-two-drive-test.md)
+documents the manual checks now completed in the Windows results above. See
 [replication and recovery](replication.md) for command behavior and limits.
 
 ## Earlier inventory and image-audit checks
@@ -73,4 +109,4 @@ The [checks workflow](https://github.com/mpanelo/iarchive/actions/workflows/ci.y
 
 ## Remaining limits
 
-Synthetic checks do not prove behavior with real Windows external drives, a complete iCloud library, or a 200 GiB library. The declared Rust minimum version has not been independently tested. The archive CLI has no cloud authentication, deletion or quarantine. Replica commands now distinguish independently checked local bytes from OS-reported physical independence and unverified cloud coverage; saved status does not reverify files.
+Windows checks now cover synthetic files on two physical drives. USB disconnects, private archives, a complete iCloud library and a 200 GiB library remain untested. The declared Rust minimum version has not been independently tested. The archive CLI has no cloud authentication, deletion or quarantine. Replica commands now distinguish independently checked local bytes from OS-reported physical independence and unverified cloud coverage; saved status does not reverify files.
