@@ -34,23 +34,9 @@ git clone https://github.com/mpanelo/iarchive.git
 cd iarchive
 ```
 
-Follow the **[full workflow](docs/workflows.md)** for Windows or macOS:
-
-```text
-doctor
-init
-import
-index
-audit
-report
-export-manifest
-replicate --dry-run
-replicate
-review
-Ctrl+C to stop review
-verify --deep
-status
-```
+Follow the **[guided walkthrough](docs/workflows.md)** for Windows or macOS.
+Its demo script creates synthetic images and takes you through scanning, copying,
+browser review and verification. No manual path or variable setup is needed.
 
 Windows setup installs missing prerequisites and builds the app. macOS builds
 need Rust/Cargo and [uv](https://docs.astral.sh/uv/). Image analysis uses managed
@@ -77,7 +63,7 @@ Use `--help` for options. See the [CLI reference](docs/CLI.md) for exit codes.
 
 ## Documentation
 
-- [Full workflow](docs/workflows.md)
+- [Guided walkthrough and archive commands](docs/workflows.md)
 - [Windows setup and tests](docs/windows-testing.md)
 - [Two-drive tests](docs/windows-two-drive-test.md)
 - [Browser review](docs/review.md)

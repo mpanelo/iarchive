@@ -52,6 +52,7 @@ Document the commit message convention
 - Write short, plain instructions for a person using the app.
 - Put each command on its own line. Show only what the reader needs to run.
 - Keep automation, exit-code guards and error-handling boilerplate in scripts.
+- Do not make users assemble demo paths, variables or argument arrays. Provide a guided script for multi-step setup and examples with explicit paths for ordinary use.
 - Use one main workflow; link to references instead of repeating them.
 - Keep necessary safety limits and exact test evidence. Put implementation details in technical docs.
 
