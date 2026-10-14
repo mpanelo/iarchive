@@ -568,17 +568,24 @@ mod tests {
         fs::write(&outside, [0xff, 0xd8, 0xff, 0xd9]).unwrap();
         assert!(read_preview(&fixture.state.cache, outside.to_str().unwrap()).is_err());
         let preview = fixture.state.cache.join("synthetic.jpg");
+        // Joining onto a Windows verbatim path normalizes away parent components.
+        // Append raw text so the fixture actually exercises the traversal guard.
+        let mut traversal = fixture.state.cache.as_os_str().to_os_string();
+        for component in ["..", "thumbnails", "synthetic.jpg"] {
+            traversal.push(std::path::MAIN_SEPARATOR_STR);
+            traversal.push(component);
+        }
+        let traversal = PathBuf::from(traversal);
         assert!(
-            read_preview(
-                &fixture.state.cache,
-                fixture
-                    .state
-                    .cache
-                    .join("../thumbnails/synthetic.jpg")
-                    .to_str()
-                    .unwrap()
-            )
-            .is_err()
+            traversal
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        );
+        assert_eq!(
+            read_preview(&fixture.state.cache, traversal.to_str().unwrap())
+                .unwrap_err()
+                .to_string(),
+            "invalid preview path"
         );
         fs::write(&preview, b"not a JPEG").unwrap();
         assert_eq!(
