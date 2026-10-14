@@ -45,6 +45,57 @@ pub struct CycleStatus {
 }
 
 impl Store {
+    /// Open a checkpointed database without creating SQLite WAL/SHM files.
+    /// The caller must hold the state lock so writers cannot change the snapshot.
+    pub fn open_checkpointed(path: &Path) -> Result<Self> {
+        for suffix in ["-wal", "-journal"] {
+            let mut journal = path.as_os_str().to_os_string();
+            journal.push(suffix);
+            match std::fs::metadata(PathBuf::from(journal)) {
+                Ok(metadata) => ensure!(
+                    metadata.len() == 0,
+                    "pending SQLite journal; run status after stopping other operations before previewing"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let absolute = path.canonicalize()?;
+        let text = absolute
+            .to_str()
+            .context("state database path is not Unicode")?;
+        #[cfg(windows)]
+        let text = {
+            let local = text.strip_prefix(r"\\?\").unwrap_or(text);
+            ensure!(
+                !local.starts_with("UNC\\") && !local.starts_with(r"\\"),
+                "checkpointed previews require a local state directory"
+            );
+            format!("/{}", local.replace('\\', "/"))
+        };
+        // Escape URI syntax, including spaces, percent signs, '#' and '?'.
+        let mut uri = String::from("file:");
+        for byte in text.bytes() {
+            if byte.is_ascii_alphanumeric() || b"/-_.:".contains(&byte) {
+                uri.push(char::from(byte));
+            } else {
+                use std::fmt::Write;
+                write!(&mut uri, "%{byte:02X}")?;
+            }
+        }
+        uri.push_str("?mode=ro&immutable=1");
+        let connection = Connection::open_with_flags(
+            uri,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        ensure!(
+            (1..=STORE_SCHEMA_VERSION).contains(&version),
+            "unsupported state database schema"
+        );
+        Ok(Self { connection })
+    }
+
     pub fn open_readonly(path: &Path) -> Result<Self> {
         let connection =
             Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;

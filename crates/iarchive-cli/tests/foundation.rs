@@ -107,7 +107,11 @@ fn doctor_reports_missing_secondary() {
 #[test]
 fn destructive_commands_are_unavailable() {
     let dir = tempfile::tempdir().unwrap();
-    for command in [vec!["cloud", "delete"], vec!["quarantine"], vec!["purge"]] {
+    for command in [
+        vec!["cloud", "delete"],
+        vec!["quarantine", "--cycle", "x"],
+        vec!["purge"],
+    ] {
         assert!(!run(dir.path(), &command).status.success());
     }
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);

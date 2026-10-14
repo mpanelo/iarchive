@@ -74,6 +74,27 @@ pub struct ReviewSnapshot {
 }
 
 impl Store {
+    /// Current Keep decisions protect shared members across all imported cycles.
+    pub fn kept_review_files(&self) -> Result<BTreeSet<i64>> {
+        let cycles = self
+            .connection
+            .prepare("SELECT id FROM archive_cycle ORDER BY id")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut kept = BTreeSet::new();
+        for cycle in cycles {
+            for group in self.review_snapshot(&cycle)?.groups {
+                if group
+                    .decision
+                    .is_some_and(|d| d.action == ReviewAction::KeepAll)
+                {
+                    kept.extend(group.members.into_iter().map(|file| file.id));
+                }
+            }
+        }
+        Ok(kept)
+    }
+
     fn review_file(&self, id: i64) -> Result<ReviewFile> {
         let (mut file, warnings, features) = self.connection.query_row(
             "SELECT f.cycle_id,f.relative_path,f.kind,f.byte_count,f.mtime_ns,f.sha256,f.present,f.error,a.error,f.warnings_json,a.features_json,c.active_scan FROM file_item f JOIN archive_cycle c ON c.id=f.cycle_id LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.id=?1",

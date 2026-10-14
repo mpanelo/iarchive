@@ -156,6 +156,116 @@ fn same_contents(a: &FileFact, b: &FileFact) -> bool {
     a.byte_count == b.byte_count && a.sha256.is_some() && a.sha256 == b.sha256 && b.error.is_none()
 }
 
+/// Read and independently hash both media roots without progress or artifact writes.
+/// This observes the frozen replica; it does not authorize a later operation.
+pub fn verify_frozen(source: &Path, binding: &Binding) -> Summary {
+    let mut report = Summary::new(true);
+    let result = (|| -> Result<()> {
+        let source =
+            volume::checked_directory(source).context("source root is unavailable or linked")?;
+        let secondary = volume::checked_directory(&binding.secondary_root)
+            .context("bound secondary root is unavailable or linked")?;
+        ensure!(
+            !source.starts_with(&secondary) && !secondary.starts_with(&source),
+            "source and secondary roots overlap"
+        );
+        let check_identity = || -> Result<()> {
+            ensure!(
+                volume::identity(&source)? == binding.source
+                    && volume::identity(&secondary)? == binding.secondary,
+                "source or bound secondary root/volume changed or disconnected"
+            );
+            Ok(())
+        };
+        check_identity()?;
+        if volume::independent(&binding.source, &binding.secondary) {
+            report.independent_physical_drives = "VERIFIED BY OS TOPOLOGY";
+        }
+        ensure!(
+            !binding.files.is_empty(),
+            "frozen archive contains no files"
+        );
+        let current = inventory(&source, &mut report.issues)?;
+        let copies = inventory(&secondary, &mut report.issues)?;
+        report.planned_files = binding.files.len() as u64;
+        report.file_errors = current
+            .iter()
+            .chain(&copies)
+            .filter(|f| f.error.is_some())
+            .count() as u64;
+        let expected: BTreeMap<_, _> = binding
+            .files
+            .iter()
+            .map(|f| (f.relative_path.as_str(), f))
+            .collect();
+        ensure!(
+            expected.len() == binding.files.len(),
+            "duplicate paths in frozen replica binding"
+        );
+        report.bytes = binding.files.iter().try_fold(0u64, |total, f| {
+            total
+                .checked_add(f.byte_count)
+                .context("archive byte total overflow")
+        })?;
+        for (label, files) in [("source", &current), ("secondary", &copies)] {
+            for file in files {
+                if !expected.contains_key(file.relative_path.as_str()) {
+                    report.extra_files += 1;
+                    report
+                        .issues
+                        .push(format!("Extra {label} entry: {}", file.relative_path));
+                }
+            }
+        }
+        let current: BTreeMap<_, _> = current
+            .iter()
+            .map(|f| (f.relative_path.as_str(), f))
+            .collect();
+        let copies: BTreeMap<_, _> = copies
+            .iter()
+            .map(|f| (f.relative_path.as_str(), f))
+            .collect();
+        for file in &binding.files {
+            match (
+                current.get(file.relative_path.as_str()),
+                copies.get(file.relative_path.as_str()),
+            ) {
+                (Some(now), Some(copy))
+                    if *now == file && file.error.is_none() && same_contents(file, copy) =>
+                {
+                    report.verified_files += 1;
+                }
+                (None, _) | (_, None) => {
+                    report.missing_files += 1;
+                    report.issues.push(format!(
+                        "Missing source or secondary file: {}",
+                        file.relative_path
+                    ));
+                }
+                _ => {
+                    report.hash_mismatches += 1;
+                    report.issues.push(format!(
+                        "Source facts or replica bytes changed: {}",
+                        file.relative_path
+                    ));
+                }
+            }
+        }
+        check_identity()?;
+        ensure!(
+            report.issues.is_empty(),
+            "fresh replica check contains findings"
+        );
+        report.complete = true;
+        report.local_replica = "LOCAL BYTES VERIFIED";
+        Ok(())
+    })();
+    if let Err(error) = result {
+        report.issues.push(format!("{error:#}"));
+    }
+    report
+}
+
 pub fn capacity(required: u64, reserve: u64, available: u64, margin: f64) -> Result<()> {
     ensure!(
         margin.is_finite() && (0.0..1.0).contains(&margin),

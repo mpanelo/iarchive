@@ -1,4 +1,5 @@
 mod operations;
+mod quarantine;
 mod replication;
 mod review;
 mod worker;
@@ -111,6 +112,11 @@ enum Commands {
         )]
         port: u16,
     },
+    /// Preview flagged files and safety blockers; requires --dry-run and never moves media.
+    Quarantine {
+        #[arg(long)]
+        cycle: String,
+    },
     /// Copy a frozen raw file set without overwriting, then independently verify both roots.
     Replicate(replication::Args),
     /// Independently rehash both roots against the frozen replica binding; never copy media.
@@ -178,6 +184,9 @@ fn state_dir(cli: &Cli) -> Result<PathBuf> {
     if matches!(cli.command, Commands::Review { .. }) {
         review::reject_links(&p)?;
     }
+    if matches!(cli.command, Commands::Quarantine { .. }) {
+        return iarchive_fs::volume::checked_directory(&p);
+    }
     absolute_destination(&p)
 }
 
@@ -203,11 +212,12 @@ fn check_root(state: &Path, root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn preflight(state: &Path, config: &Option<Config>) -> Result<()> {
+fn check_state_artifacts(state: &Path) -> Result<()> {
     for name in [
         "config.toml",
         "manifest.sqlite",
         "manifest.sqlite-wal",
+        "manifest.sqlite-journal",
         "manifest.sqlite-shm",
         "writer.lock",
         "thumbnails",
@@ -220,6 +230,11 @@ fn preflight(state: &Path, config: &Option<Config>) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn preflight(state: &Path, config: &Option<Config>) -> Result<()> {
+    check_state_artifacts(state)?;
     if let Some(c) = config {
         check_root(state, &c.primary)?;
         if let Some(s) = &c.secondary {
@@ -265,7 +280,29 @@ fn emit(cli: &Cli, value: &impl Serialize) -> Result<()> {
 }
 
 fn run(cli: &Cli) -> Result<bool> {
+    ensure!(
+        !matches!(cli.command, Commands::Quarantine { .. }) || cli.dry_run,
+        "quarantine execution is unavailable; use --dry-run for a read-only preview"
+    );
     let state = state_dir(cli)?;
+    if let Commands::Quarantine { cycle } = &cli.command {
+        validate_cycle(cycle)?;
+        check_state_artifacts(&state)?;
+        let lock = File::open(state.join("writer.lock"))?;
+        FileExt::try_lock_shared(&lock)
+            .context("another iarchive operation holds this state directory")?;
+        let store = Store::open_checkpointed(&state.join("manifest.sqlite"))?;
+        for root in store.roots()? {
+            check_root(&state, &root)?;
+        }
+        if let Some(config) = load_config(&state)? {
+            check_root(&state, &config.primary)?;
+            if let Some(secondary) = config.secondary {
+                check_root(&state, &secondary)?;
+            }
+        }
+        return quarantine::run(cli, &store, cycle);
+    }
     let config = load_config(&state)?;
     preflight(&state, &config)?;
     match &cli.command {
@@ -370,6 +407,7 @@ fn run(cli: &Cli) -> Result<bool> {
         | Commands::ExportManifest { cycle, .. }
         | Commands::Audit { cycle, .. }
         | Commands::Review { cycle, .. }
+        | Commands::Quarantine { cycle }
         | Commands::Report { cycle } => cycle,
         Commands::Replicate(args) | Commands::Verify { args, .. } => &args.cycle,
         _ => unreachable!(),

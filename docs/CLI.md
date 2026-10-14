@@ -25,6 +25,7 @@ Run from the checkout. Use one state directory and cycle for each workflow.
 | `export-manifest` | `--cycle ID --output PATH` |
 | `replicate` | `--cycle ID --primary-artifacts PATH --secondary-artifacts PATH`, optional `--secondary PATH` |
 | `review` | `--cycle ID`, optional `--port NUMBER` |
+| `quarantine` | `--dry-run --cycle ID`; read-only preview of saved flags and blockers |
 | `verify` | The replica options above, plus required `--deep` |
 | `status` | `--cycle ID` |
 
@@ -50,6 +51,17 @@ worker and does not claim a complete visual audit.
 
 Videos can be copied successfully while their visual audit remains incomplete.
 Successful local checks do not prove complete cloud coverage.
+
+After stopping review, preview saved flags:
+
+```sh
+iarchive --dry-run quarantine --cycle ID
+```
+
+It rehashes both roots from the saved replica binding. Keep decisions,
+changed or unverified copies, and unknown file relationships block quarantine.
+Relationships are currently unknown, so flags remain blocked. No files move;
+quarantine execution and restore are unavailable.
 
 ## State and worker locations
 
