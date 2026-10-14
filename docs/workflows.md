@@ -5,14 +5,17 @@ existing archive.
 
 ## Windows demo
 
-Run setup once, then start the guided demo:
+Allow scripts in this session, run setup, then start the guided demo:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\setup.ps1
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\demo.ps1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\scripts\windows\setup.ps1
+.\scripts\windows\demo.ps1
 ```
 
-If setup installs tools, open a fresh terminal before starting the demo.
+The policy lasts only for this PowerShell session. Repeat the policy command in
+each new window or tab. If setup installs tools, open a fresh terminal before
+starting the demo.
 See [Windows setup](windows-testing.md) for installer details and automated tests.
 
 ## macOS demo

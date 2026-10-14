@@ -20,8 +20,12 @@ folders.
 ## 2. Set up
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\setup.ps1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\scripts\windows\setup.ps1
 ```
+
+Run the policy command once in each new PowerShell window or tab. It lasts only
+for that session and needs no administrator terminal.
 
 Setup detects Rustup/Cargo, uv, MSVC C++ tools and a Windows SDK. Compatible tools
 are reused; missing tools are installed through WinGet. It then installs locked
@@ -30,15 +34,16 @@ project dependencies and builds `target\release\iarchive.exe`.
 **Prerequisite installers can change Windows outside the checkout** and may ask
 for administrator access. Project tools stay in `.windows-sandbox`; this is a
 storage folder, not OS isolation. Profiles and saved execution policies are not
-changed. The policy in the command applies only to that PowerShell process.
+changed.
 
 Wait for `Setup complete`. If tools were installed, open a fresh terminal in the
-checkout before testing. Complete any requested restart and rerun setup.
+checkout before testing and repeat the policy command. Complete any requested
+restart and rerun setup.
 
 ## 3. Test locally
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\test.ps1
+.\scripts\windows\test.ps1
 ```
 
 This runs Rust/Python checks, builds the release executable, then tests the CLI
@@ -53,7 +58,7 @@ Missing optional ffprobe or icloudpd is fine; the image worker is required.
 Replace `D:` and `E:` with your drive letters:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "& '.\scripts\windows\test.ps1' -ExternalDrives 'D:', 'E:'"
+.\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
 ```
 
 This writes fresh test files under `iarchive-sandbox\run-<id>` on each selected
@@ -67,12 +72,11 @@ If full checks already passed for this code, use the existing build for smoke
 checks only:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -Command "& '.\scripts\windows\test.ps1' -SmokeOnly -ExternalDrives 'D:', 'E:'"
+.\scripts\windows\test.ps1 -SmokeOnly -ExternalDrives 'D:', 'E:'
 ```
 
 The summary then marks automated checks as skipped. Rerun full checks after code
-changes. `-Command` is used because PowerShell 5.1's `-File` cannot pass this
-array of drive arguments.
+changes.
 
 ## Results and storage
 
@@ -98,9 +102,8 @@ real archive or iCloud library is fully backed up.
 
 ### Scripts are disabled
 
-Use the `powershell.exe -ExecutionPolicy RemoteSigned` commands above. No saved
-policy change or administrator terminal is needed. Organization policies may
-still restrict scripts.
+Repeat the session-only policy command from [Set up](#2-set-up), then rerun the
+script. Organization policies may still restrict scripts.
 
 ### Setup passed, but Cargo is missing
 
@@ -109,7 +112,7 @@ from before installation. For the standard Rust installation, you can also use:
 
 ```powershell
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows\test.ps1
+.\scripts\windows\test.ps1
 ```
 
 For a custom installation, use its Cargo launcher directory instead.

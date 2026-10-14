@@ -7,23 +7,19 @@ if one fails.
 Tests write fresh generated files under `iarchive-sandbox\run-<id>` on each drive.
 They do not scan your photo archive. Keep both drives connected.
 
-## 1. Open a test tab
+## 1. Allow scripts in this session
 
-In Windows Terminal:
-
-```powershell
-wt -w 0 new-tab -d "$PWD" powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -NoExit
-```
-
-Without Windows Terminal, set policy for the current process:
+Run once in your PowerShell window or tab:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 ```
 
+This lasts only for the session. Repeat it in each new window or tab.
+
 ## 2. Update and test
 
-Run these in the test tab:
+Run these in the same window or tab:
 
 ```powershell
 git pull --ff-only
@@ -31,7 +27,8 @@ git pull --ff-only
 .\scripts\windows\test.ps1 -ExternalDrives 'D:', 'E:'
 ```
 
-If setup installed tools, open a fresh test tab before testing.
+If setup installed tools, open a fresh tab before testing and repeat the policy
+command.
 Require `passed: true` and `automated_checks: PASSED` in the printed summary.
 See [setup help](windows-testing.md) if needed.
 
