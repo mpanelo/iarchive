@@ -4,8 +4,8 @@ const token = location.hash.slice(1);
 window.addEventListener('hashchange', () => location.reload());
 const message = document.getElementById('message');
 let audit, category = 'all', page = 0, busy = false;
-let previews = new AbortController();
-let blobs = [];
+let savingFingerprint;
+const cards = new Map();
 const selections = new Map();
 const feedback = new Map();
 const perPage = 12;
@@ -45,20 +45,20 @@ function visibleGroups() {
   return audit.groups.filter(group => category === 'all' || (category === 'reviewed' ? !!group.decision : group.kind === category));
 }
 function render() {
-  previews.abort();
-  previews = new AbortController();
-  for (const blob of blobs) URL.revokeObjectURL(blob);
-  blobs = [];
   const filters = document.getElementById('filters');
-  filters.replaceChildren();
   for (const [key, label] of Object.entries(labels)) {
     const count = key === 'all' ? audit.groups.length : key === 'findings' ? audit.findings.length + audit.scan_issues.length : audit.groups.filter(g => key === 'reviewed' ? !!g.decision : g.kind === key).length;
-    const button = element('button', '', label);
-    button.type = 'button';
+    let button = filters.querySelector(`[data-category="${key}"]`);
+    if (!button) {
+      button = element('button', '', label);
+      button.type = 'button';
+      button.dataset.category = key;
+      button.append(element('span', 'count'));
+      button.addEventListener('click', () => { category = key; page = 0; render(); });
+      filters.append(button);
+    }
     button.setAttribute('aria-pressed', String(category === key));
-    button.append(element('span', 'count', String(count)));
-    button.addEventListener('click', () => { if (busy) return; category = key; page = 0; render(); });
-    filters.append(button);
+    button.querySelector('.count').textContent = String(count);
   }
   const groups = visibleGroups();
   const pages = Math.max(1, Math.ceil(groups.length / perPage));
@@ -67,21 +67,37 @@ function render() {
   const unit = category === 'findings' ? 'finding' : 'group';
   document.getElementById('list-count').textContent = `${groups.length} ${unit}${groups.length === 1 ? '' : 's'}`;
   const list = document.getElementById('groups');
-  list.replaceChildren();
-  if (!groups.length) list.append(element('p', 'empty', category === 'reviewed' ? 'Your saved decisions will appear here.' : 'No saved results in this category. Run an audit to generate candidates and previews.'));
-  for (const group of groups.slice(page * perPage, (page + 1) * perPage)) list.append(groupCard(group));
+  const visible = groups.slice(page * perPage, (page + 1) * perPage).map((group, index) => ({
+    group, key: group.fingerprint || `${group.kind}:${group.members[0]?.id ?? page * perPage + index}`,
+  }));
+  const wanted = new Set(visible.map(item => item.key));
+  for (const [key, view] of cards) {
+    if (!wanted.has(key)) { view.dispose(); view.card.remove(); cards.delete(key); }
+  }
+  if (visible.length) list.querySelector('.empty')?.remove();
+  else if (!list.querySelector('.empty')) list.append(element('p', 'empty', category === 'reviewed' ? 'Your saved decisions will appear here.' : 'No saved results in this category. Run an audit to generate candidates and previews.'));
+  for (const [index, { group, key }] of visible.entries()) {
+    let view = cards.get(key);
+    if (!view) { view = groupCard(group); cards.set(key, view); }
+    view.update(group);
+    // Keep retained cards connected, including their loaded images and blob URLs.
+    if (list.children[index] !== view.card) list.insertBefore(view.card, list.children[index] || null);
+  }
   document.getElementById('page').textContent = `Page ${page + 1} of ${pages}`;
-  document.getElementById('previous').disabled = page === 0 || busy;
-  document.getElementById('next').disabled = page === pages - 1 || busy;
+  document.getElementById('previous').disabled = page === 0;
+  document.getElementById('next').disabled = page === pages - 1;
 }
 function groupCard(group) {
   const card = element('article', 'group');
+  const previews = new AbortController();
+  const blobs = new Set();
   if (group.fingerprint) card.dataset.fingerprint = group.fingerprint;
   const heading = element('div', 'group-heading');
   const description = element('div');
   description.append(element('h3', '', labels[group.kind] || 'Saved finding'), element('p', '', group.explanation));
   heading.append(description);
-  if (group.decision) heading.append(element('span', 'decision', decisions[group.decision.action]));
+  const badge = element('span', 'decision');
+  heading.append(badge);
   card.append(heading);
   const members = element('div', 'members');
   if (group.fingerprint && !selections.has(group.fingerprint)) selections.set(group.fingerprint, new Set(group.decision?.selected || []));
@@ -92,6 +108,7 @@ function groupCard(group) {
   status.tabIndex = -1;
   let flagButton;
   function updateSelection() {
+    if (!selected) return;
     const saved = feedback.get(group.fingerprint);
     status.classList.toggle('error', !!saved?.error);
     const count = selected.size;
@@ -101,12 +118,12 @@ function groupCard(group) {
     else if (count) status.textContent = `${count} image${count === 1 ? '' : 's'} selected — not saved. Click “Save selected flags”.`;
     else if (group.decision?.action === 'flag_selected') status.textContent = 'No images selected. Use “Clear this group’s decision” to remove its saved flags.';
     else status.textContent = 'Select images above, then click “Save selected flags”.';
-    if (flagButton) flagButton.disabled = busy || count === 0 || unchanged;
+    if (flagButton) flagButton.disabled = savingFingerprint === group.fingerprint || count === 0 || unchanged;
   }
   for (const file of group.members) members.append(fileCard(file, selected, () => {
     feedback.delete(group.fingerprint);
     updateSelection();
-  }));
+  }, previews.signal, blobs));
   if (group.members.length) card.append(members);
   if (group.fingerprint) {
     const actions = element('div', 'actions');
@@ -122,13 +139,33 @@ function groupCard(group) {
     card.append(status);
     updateSelection();
   }
-  return card;
+  return {
+    card,
+    update(next) {
+      group = next;
+      badge.hidden = !group.decision;
+      badge.textContent = group.decision ? decisions[group.decision.action] : '';
+      const pending = !!group.fingerprint && savingFingerprint === group.fingerprint;
+      card.setAttribute('aria-busy', String(pending));
+      for (const button of card.querySelectorAll('button')) button.disabled = pending;
+      for (const checkbox of card.querySelectorAll('input')) {
+        checkbox.disabled = pending;
+        checkbox.checked = selected.has(Number(checkbox.dataset.fileId));
+      }
+      updateSelection();
+      if (pending) status.textContent = 'Saving this group’s decision…';
+    },
+    dispose() {
+      previews.abort();
+      for (const blob of blobs) URL.revokeObjectURL(blob);
+    },
+  };
 }
-function fileCard(file, selected, selectionChanged) {
+function fileCard(file, selected, selectionChanged, signal, blobs) {
   const card = element('div', 'file');
   const preview = element('div', 'preview', file.decode_error ? 'Image could not be decoded' : 'No saved preview');
   card.append(preview);
-  if (file.preview_available) showPreview(file, preview, previews.signal);
+  if (file.preview_available) showPreview(file, preview, signal, blobs);
   const info = element('div', 'file-info');
   info.append(element('p', 'file-path', file.relative_path));
   info.append(element('p', '', `${file.cycle} · ${file.kind} · ${new Intl.NumberFormat().format(file.byte_count)} bytes`));
@@ -143,6 +180,7 @@ function fileCard(file, selected, selectionChanged) {
     const label = element('label');
     const checkbox = element('input');
     checkbox.type = 'checkbox';
+    checkbox.dataset.fileId = file.id;
     checkbox.checked = selected.has(file.id);
     checkbox.addEventListener('change', () => {
       if (checkbox.checked) selected.add(file.id);
@@ -155,13 +193,13 @@ function fileCard(file, selected, selectionChanged) {
   card.append(info);
   return card;
 }
-async function showPreview(file, container, signal) {
+async function showPreview(file, container, signal, blobs) {
   try {
     const response = await request(`/api/preview/${file.id}`, { signal });
     const blob = await response.blob();
     if (signal.aborted) return;
     const url = URL.createObjectURL(blob);
-    blobs.push(url);
+    blobs.add(url);
     const image = element('img');
     image.src = url;
     image.alt = `Saved preview of ${file.relative_path}`;
@@ -172,11 +210,12 @@ async function showPreview(file, container, signal) {
   }
 }
 async function save(group, action, selected, card) {
-  if (busy) return;
+  if (busy) { notice('A decision is saving. Please try again in a moment.'); return; }
   if (action === 'flag_selected' && !selected.size) return;
   busy = true;
-  for (const button of document.querySelectorAll('button')) button.disabled = true;
-  for (const input of card.querySelectorAll('input')) input.disabled = true;
+  savingFingerprint = group.fingerprint;
+  const startedCategory = category, startedPage = page;
+  cards.get(group.fingerprint)?.update(group);
   const status = card.querySelector('.group-status');
   status.classList.remove('error');
   status.textContent = 'Saving this group’s decision…';
@@ -186,9 +225,10 @@ async function save(group, action, selected, card) {
     await request('/api/decision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fingerprint: group.fingerprint, action, selected: action === 'flag_selected' ? [...selected] : [] }) });
     saved = true;
     await load(false);
-    // Reset only this group's draft after its saved state has been refreshed.
-    selections.delete(group.fingerprint);
     const count = selected.size;
+    // Retained card listeners share this Set; update it without replacing it.
+    selected.clear();
+    for (const id of audit.groups.find(item => item.fingerprint === group.fingerprint)?.decision?.selected || []) selected.add(id);
     result = { text: {
       keep_all: 'Saved: every image in this group is marked to keep.',
       flag_selected: `Saved: ${count} image${count === 1 ? '' : 's'} flagged in this group.`,
@@ -200,13 +240,14 @@ async function save(group, action, selected, card) {
   }
   feedback.set(group.fingerprint, result);
   busy = false;
+  savingFingerprint = undefined;
   render();
   const updated = document.querySelector(`[data-fingerprint="${group.fingerprint}"]`);
-  updated?.querySelector('.group-status').focus({ preventScroll: true });
+  if (category === startedCategory && page === startedPage) updated?.querySelector('.group-status').focus({ preventScroll: true });
   // Clearing a group in the Reviewed filter removes its card from this view.
   if (!updated) notice(result.text, !!result.error);
 }
-document.getElementById('previous').addEventListener('click', () => { if (page > 0 && !busy) { page--; render(); } });
-document.getElementById('next').addEventListener('click', () => { if (!busy) { page++; render(); } });
+document.getElementById('previous').addEventListener('click', () => { if (page > 0) { page--; render(); } });
+document.getElementById('next').addEventListener('click', () => { page++; render(); });
 if (!/^[a-f0-9]{64}$/.test(token)) notice('Open the complete private review URL printed by iarchive, including the part after #.', true);
 else load().then(() => notice('Saved observations ready for review.')).catch(error => notice(error.message, true));
