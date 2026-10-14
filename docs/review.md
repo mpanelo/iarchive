@@ -1,47 +1,49 @@
 # Browser review
 
-Start with the [full workflow](workflows.md). Use its executable, state and cycle.
-
-**Windows:**
+The [guided demo](workflows.md) starts review for you. For an existing archive,
+use its cycle ID and state directory:
 
 ```powershell
-& $exe --state-dir $state review --cycle $cycle
+.\target\release\iarchive.exe review --cycle archive-2026-10-13
 ```
 
-**macOS:**
+On macOS, use `./target/release/iarchive`. Add `--state-dir PATH` if your archive
+uses a custom state directory.
 
-```sh
-"$exe" --state-dir "$state" review --cycle "$cycle"
-```
+Open the full printed URL, including everything after `#`. Keep the terminal
+running. The URL works only for this session.
 
-Open the full printed URL, including everything after `#`. It works only for
-this session. The gallery runs on `127.0.0.1`; keep its URL private.
+## Review a group
 
-## Save a note
+1. Compare the images in one group.
+2. To flag images, check **Flag this image for later**, then click
+   **Save selected flags** beneath that group.
+3. Look for the saved confirmation beside the group. Checking a box alone
+   does not save anything.
 
-Filter by exact duplicates, similar images, dark candidates, failures or reviewed
-groups. Compare previews, paths and measurements.
-
-| Button | What it saves |
+| Button | Applies to this group only |
 | --- | --- |
-| Keep all | Keep this group. |
-| Flag selected for later | A note for the checked files. |
-| Decide later | A deferred decision. |
-| Clear decision | Clear the current note; keep its history. |
+| Keep this group | Mark every image in the group to keep. |
+| Save selected flags | Save flags for its checked images. |
+| Decide on this group later | Defer this group's decision. |
+| Clear this group's decision | Clear its decision and selections; retain history. |
 
-Notes save immediately to SQLite. Files stay unchanged. Reopening the same audit
-keeps its notes. A new index or audit leaves earlier notes as history.
+Selections in other groups stay intact when you save or clear a group. Filters
+and pages also preserve unsaved selections. Save before closing or refreshing
+the tab. The same image can appear in several groups; decisions are independent.
 
-## Stop or refresh
+Flags are saved review decisions. They do not move or delete photos.
+Reopening the same audit keeps saved decisions. A new index or audit leaves
+previous decisions as history.
 
-Press **Ctrl+C** in the terminal before running another command against this
-state. Review holds its writer lock.
+## Finish
+
+Press **Ctrl+C** in the terminal to stop review. The guided demo then verifies
+both copies automatically. For an existing archive, run `verify --deep` as shown
+in the [walkthrough](workflows.md) to include your decisions in fresh bundles.
 
 Missing preview? Stop review and rerun audit. Exact-only audits do not generate
 previews. Decode failures stay visible as findings.
 
-After review, run `verify --deep` to put the notes in fresh backup bundles.
-Old bundles are not updated automatically.
-
-The gallery serves cached JPEG previews, never originals. It does not check
-current file integrity or approve removal. See [safety](safety.md).
+The gallery serves cached previews, never originals. Review does not verify
+current file integrity or complete cloud coverage. See [safety](safety.md).

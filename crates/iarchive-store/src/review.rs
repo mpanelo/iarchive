@@ -243,6 +243,9 @@ mod tests {
         store
             .candidate("x", "dark", "Synthetic dark candidate", &[1])
             .unwrap();
+        store
+            .candidate("x", "similar", "Overlapping synthetic group", &[1])
+            .unwrap();
         let fingerprint = store.review_snapshot("x").unwrap().groups[0]
             .fingerprint
             .clone();
@@ -260,6 +263,17 @@ mod tests {
             vec![1]
         );
         assert_eq!(snapshot.decision_history_count, 1);
+        assert!(snapshot.groups[1].decision.is_none());
+        store
+            .record_review(
+                "x",
+                &ReviewInput {
+                    fingerprint: snapshot.groups[1].fingerprint.clone(),
+                    action: ReviewAction::KeepAll,
+                    selected: vec![],
+                },
+            )
+            .unwrap();
         for (action, selected) in [
             (ReviewAction::FlagSelected, vec![]),
             (ReviewAction::FlagSelected, vec![1, 1]),
@@ -301,6 +315,10 @@ mod tests {
                     Some(action)
                 }
             );
+            assert_eq!(
+                snapshot.groups[1].decision.as_ref().unwrap().action,
+                ReviewAction::KeepAll
+            );
         }
         let scan = store.begin_scan("x").unwrap();
         fact.sha256 = Some("b".repeat(64));
@@ -313,7 +331,7 @@ mod tests {
         let snapshot = store.review_snapshot("x").unwrap();
         assert_ne!(snapshot.groups[0].fingerprint, fingerprint);
         assert!(snapshot.groups[0].decision.is_none());
-        assert_eq!(snapshot.decision_history_count, 4);
+        assert_eq!(snapshot.decision_history_count, 5);
         assert!(store.record_review("x", &input).is_err());
         assert_eq!(store.status("x").unwrap().stage, "INDEXED");
         let old: String = store
