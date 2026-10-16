@@ -73,7 +73,9 @@ be repeated. Both drive scripts must pass.
 This uses five generated files. It proves their metadata groups, flags two images,
 quarantines four associated files, verifies both copies, then restores the
 original paths, hashes and timestamps. The secondary media must stay unchanged.
-Wait for `PASS`.
+It also resumes a simulated download in a second cycle, checks cache reuse and
+cross-cycle matches, and copies it without changing the earlier archive.
+Wait for `PASS` and `download_recovery: PASSED` in the summary.
 
 ## 6. Keep the results
 

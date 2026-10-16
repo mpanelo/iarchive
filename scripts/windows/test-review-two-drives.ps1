@@ -107,10 +107,48 @@ try {
     Assert-UnchangedSnapshot $source $before
     Assert-UnchangedSnapshot $secondary $backup
     $null = Invoke-IarchiveJson $exe $state $reports 'verify-restored' (@('verify', '--deep') + $replicaArgs)
+    # A later download resumes in its own cycle without changing earlier archives.
+    $oldReport = Invoke-IarchiveJson $exe $state $reports 'earlier-cycle-before' @('report', '--cycle', 'synthetic-review')
+    $nextSource = New-FreshDirectory (Join-Path $primary 'next-media')
+    $nextSecondary = New-FreshDirectory (Join-Path $secondaryRun 'next-media')
+    Copy-Item -LiteralPath (Join-Path $source 'portrait.jpg') -Destination (Join-Path $nextSource 'ready.jpg')
+    Copy-Item -LiteralPath (Join-Path $source 'cropped.jpg') -Destination (Join-Path $nextSource 'incoming.jpg.partial')
+    $null = Invoke-IarchiveJson $exe $state $reports 'next-import' @('import', '--cycle', 'synthetic-next', '--source', $nextSource)
+    $nextAuditArgs = @('audit', '--cycle', 'synthetic-next')
+    $interrupted = Invoke-IarchiveJson $exe $state $reports 'next-interrupted' $nextAuditArgs @(2)
+    Assert-Check (-not $interrupted.status.inventory_complete -and $interrupted.status.file_errors -eq 1) 'Partial download must block completion.'
+    Assert-Check ($interrupted.decoded_images -eq 1 -and $interrupted.status.cloud_coverage -eq 'NOT VERIFIED') 'Interrupted download summary is incorrect.'
+    $nextReplicaArgs = @('--cycle', 'synthetic-next', '--secondary', $nextSecondary,
+        '--primary-artifacts', $primaryArtifacts, '--secondary-artifacts', $secondaryArtifacts)
+    $blocked = Invoke-IarchiveJson $exe $state $reports 'next-partial-preview' (@('--dry-run', 'replicate') + $nextReplicaArgs) @(2)
+    Assert-Check (-not $blocked.complete -and @($blocked.issues | Where-Object { $_ -match 'incoming.jpg.partial' }).Count -gt 0) 'Replica must identify the incomplete file.'
+    Assert-Check (@(Get-ChildItem -LiteralPath $nextSecondary -Force).Count -eq 0) 'Preview changed secondary media.'
+    Move-Item -LiteralPath (Join-Path $nextSource 'incoming.jpg.partial') -Destination (Join-Path $nextSource 'incoming.jpg')
+    $nextBefore = @(Get-SyntheticSnapshot $nextSource)
+    $recovered = Invoke-IarchiveJson $exe $state $reports 'next-recovered' $nextAuditArgs
+    Assert-Check ($recovered.status.inventory_complete -and $recovered.status.missing_files -eq 0 -and $recovered.status.file_errors -eq 0) 'Completed download did not recover.'
+    Assert-Check ($recovered.decoded_images -eq 1 -and $recovered.analysis_cache_hits -eq 1 -and
+        $recovered.hashes_computed -eq 1 -and $recovered.hash_cache_hits -eq 1) 'Recovery did not reuse completed work.'
+    $crossCycle = @($recovered.candidates | Where-Object {
+        $_.type -eq 'exact' -and $_.members.cycle -contains 'synthetic-review' -and $_.members.cycle -contains 'synthetic-next'
+    })
+    Assert-Check ($crossCycle.Count -gt 0 -and $recovered.status.cloud_coverage -eq 'NOT VERIFIED') 'Cross-cycle review or cloud coverage is incorrect.'
+    $repeated = Invoke-IarchiveJson $exe $state $reports 'next-repeated' $nextAuditArgs
+    Assert-Check ($repeated.decoded_images -eq 0 -and $repeated.analysis_cache_hits -eq 2 -and
+        $repeated.hashes_computed -eq 0 -and $repeated.hash_cache_hits -eq 2) 'Unchanged download was needlessly reprocessed.'
+    $nextCopy = Invoke-IarchiveJson $exe $state $reports 'next-replicate' (@('replicate') + $nextReplicaArgs)
+    Assert-Check ($nextCopy.complete -and $nextCopy.verified_files -eq 2 -and $nextCopy.cloud_coverage -eq 'NOT VERIFIED') 'Recovered download did not replicate safely.'
+    $oldAfter = Invoke-IarchiveJson $exe $state $reports 'earlier-cycle-after' @('report', '--cycle', 'synthetic-review')
+    Assert-Check ((ConvertTo-Json -InputObject $oldReport -Depth 30 -Compress) -ceq
+        (ConvertTo-Json -InputObject $oldAfter -Depth 30 -Compress)) 'Later cycle changed earlier review state.'
+    Assert-UnchangedSnapshot $source $before
+    Assert-UnchangedSnapshot $secondary $backup
+    Assert-UnchangedSnapshot $nextSource $nextBefore
     Write-JsonFile (Join-Path $runRoot 'summary.json') ([pscustomobject]@{
         passed = $true; primary_run = $primary; secondary_run = $secondaryRun
         metadata_groups = 3; quarantined_and_restored_files = 4
         physical_drives = $replica.independent_physical_drives
+        cycles = 2; download_recovery = 'PASSED'; unchanged_analysis_cache_hits = 2
     })
     Write-Host "PASS. Results: $runRoot\summary.json"
 } catch {

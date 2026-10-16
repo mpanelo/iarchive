@@ -286,19 +286,13 @@ impl Store {
             reviewed.push(group);
         }
         let ids = self.connection.prepare(
-            "SELECT f.id FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id=?1 AND (f.error IS NOT NULL OR f.present=0 OR a.error IS NOT NULL OR f.kind NOT IN ('image','sidecar') OR (f.kind='image' AND a.features_json IS NULL)) ORDER BY f.relative_path",
+            "SELECT f.id FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id=?1 AND (f.present=1 OR f.kind!='partial') AND (f.error IS NOT NULL OR f.present=0 OR a.error IS NOT NULL OR f.kind NOT IN ('image','sidecar') OR (f.kind='image' AND a.features_json IS NULL)) ORDER BY f.relative_path",
         )?.query_map(params![cycle,ALGORITHM_VERSION], |r| r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let findings = ids
             .into_iter()
             .map(|id| self.review_file(id, &relationships, &moved))
             .collect::<Result<Vec<_>>>()?;
-        let scan_issues = self
-            .connection
-            .prepare("SELECT path,error FROM scan_issue WHERE scan_id=?1 ORDER BY id")?
-            .query_map([scan], |r| {
-                Ok(serde_json::json!({"path":r.get::<_,String>(0)?,"error":r.get::<_,String>(1)?}))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let scan_issues = self.scan_issues(cycle)?;
         let decision_history_count = self.connection.query_row(
             "SELECT COUNT(*) FROM review_decision WHERE cycle_id=?1",
             [cycle],

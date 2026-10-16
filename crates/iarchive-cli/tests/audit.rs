@@ -141,6 +141,7 @@ fn audit_round_trip() {
     let next = dir.path().join("next media");
     std::fs::create_dir(&next).unwrap();
     std::fs::copy(source.join("recompressed.png"), next.join("new.png")).unwrap();
+    std::fs::copy(source.join("scene.jpg"), next.join("incoming.jpg.partial")).unwrap();
     let offline = dir.path().join("offline media");
     std::fs::rename(&source, &offline).unwrap();
     assert!(
@@ -157,25 +158,26 @@ fn audit_round_trip() {
         .status
         .success()
     );
-    let output = run(
-        &state,
-        &[
-            "audit",
-            "--cycle",
-            "next",
-            "--categories",
-            "similar",
-            "--worker-project",
-            project.to_str().unwrap(),
-        ],
-    );
-    assert!(
-        output.status.success(),
+    let next_args = [
+        "audit",
+        "--cycle",
+        "next",
+        "--categories",
+        "similar",
+        "--worker-project",
+        project.to_str().unwrap(),
+    ];
+    let output = run(&state, &next_args);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["decoded_images"], 1);
+    assert_eq!(report["status"]["inventory_complete"], false);
+    assert_eq!(report["status"]["file_errors"], 1);
     assert_eq!(report["status"]["cloud_coverage"], "NOT VERIFIED");
     let groups = report["candidates"].as_array().unwrap();
     assert_eq!(groups.len(), 1);
@@ -189,5 +191,49 @@ fn audit_round_trip() {
         iarchive_fs::hash_file(&next.join("new.png")).unwrap(),
         "similarity must find a match with different bytes"
     );
+    std::fs::rename(next.join("incoming.jpg.partial"), next.join("incoming.jpg")).unwrap();
+    for (decoded, hits) in [(1, 1), (0, 2)] {
+        let output = run(&state, &next_args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for line in String::from_utf8_lossy(&output.stderr).lines() {
+            serde_json::from_str::<serde_json::Value>(line)
+                .expect("structured logs stay on stderr");
+        }
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["decoded_images"], decoded);
+        assert_eq!(report["analysis_cache_hits"], hits);
+        assert_eq!(report["hashes_computed"], decoded);
+        assert_eq!(report["hash_cache_hits"], hits);
+        assert_eq!(report["status"]["inventory_complete"], true);
+        assert_eq!(report["status"]["missing_files"], 0);
+        assert_eq!(report["status"]["pending_images"], 0);
+        assert_eq!(report["status"]["image_successes"], 2);
+        assert_eq!(report["status"]["cloud_coverage"], "NOT VERIFIED");
+        assert!(report["findings"].as_array().unwrap().is_empty());
+    }
+    let store = iarchive_store::Store::open_readonly(&state.join("manifest.sqlite")).unwrap();
+    assert!(store.review_snapshot("next").unwrap().findings.is_empty());
+    drop(store);
+    let human = Command::new(env!("CARGO_BIN_EXE_iarchive"))
+        .arg("--state-dir")
+        .arg(&state)
+        .args(next_args)
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let summary = String::from_utf8(human.stdout).unwrap();
+    assert!(
+        summary.contains("Analysis: 0 decoded, 2 cached, 0 decode errors"),
+        "{summary}"
+    );
+    assert!(
+        summary.contains("Cloud coverage: NOT VERIFIED"),
+        "{summary}"
+    );
+    assert!(summary.contains("Review suggestions with iarchive review --cycle next"));
     assert_eq!(previous(), saved, "earlier review state changed");
 }

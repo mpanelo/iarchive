@@ -137,8 +137,20 @@ Use the [two-drive checks](windows-two-drive-test.md) with synthetic files first
 List cycles with `iarchive cycles`. The gallery's cycle selector changes which
 saved archive you review; it does not rescan its media.
 
+## Later downloads
+
+Download into a separate folder and use a new cycle ID. Import and audit it with
+the same app state to compare it with earlier archives. Earlier folders stay as
+they are; similarity review can use their saved analysis while they are offline.
+
+If a download stops, finish it with your downloader, pause the downloader, then
+rerun `audit` for that cycle. Completed files reuse cached analysis. A `.partial`
+file still present or a missing original keeps the inventory incomplete.
+
 ## Results and reruns
 
+- `cycles`, `status`, `index` and `audit` print short summaries. Add `--json` for
+  full reports; progress messages go to stderr.
 - A successful copy or deep check reports `complete: true` and
   `local_replica: LOCAL BYTES VERIFIED`.
 - A preview reports `complete: false` because it has not copied anything.

@@ -37,6 +37,7 @@ pub struct CycleStatus {
     pub scan_issues: u64,
     pub image_successes: u64,
     pub image_errors: u64,
+    pub pending_images: u64,
     pub unsupported_visual_files: u64,
     pub local_replica: &'static str,
     pub replica_state: Option<String>,
@@ -296,12 +297,21 @@ impl Store {
     }
 
     pub fn findings(&self, cycle: &str) -> Result<Vec<serde_json::Value>> {
-        let mut stmt = self.connection.prepare("SELECT f.relative_path,f.error,a.error FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 WHERE f.cycle_id=?1 AND (f.error IS NOT NULL OR a.error IS NOT NULL) ORDER BY f.relative_path")?;
-        Ok(stmt.query_map([cycle],|r|Ok(serde_json::json!({"relative_path":r.get::<_,String>(0)?,"file_error":r.get::<_,Option<String>>(1)?,"decode_error":r.get::<_,Option<String>>(2)?,"review_only":true,"deletion_candidate":false})))?.collect::<rusqlite::Result<_>>()?)
+        let mut stmt = self.connection.prepare("SELECT f.relative_path,f.error,a.error FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id=?1 AND (f.present=1 OR f.kind!='partial') AND (f.error IS NOT NULL OR a.error IS NOT NULL) ORDER BY f.relative_path")?;
+        Ok(stmt.query_map(params![cycle,iarchive_core::ALGORITHM_VERSION],|r|Ok(serde_json::json!({"relative_path":r.get::<_,String>(0)?,"file_error":r.get::<_,Option<String>>(1)?,"decode_error":r.get::<_,Option<String>>(2)?,"review_only":true,"deletion_candidate":false})))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn scan_issues(&self, cycle: &str) -> Result<Vec<serde_json::Value>> {
+        let mut stmt = self.connection.prepare("SELECT path,error FROM scan_issue WHERE scan_id=(SELECT active_scan FROM archive_cycle WHERE id=?1) ORDER BY id")?;
+        Ok(stmt
+            .query_map([cycle], |row| {
+                Ok(serde_json::json!({"path":row.get::<_,String>(0)?,"error":row.get::<_,String>(1)?}))
+            })?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn mark_absent(&self, cycle: &str, scan: i64) -> Result<()> {
-        self.connection.execute("UPDATE file_item SET present=0,error='Missing from latest completed traversal' WHERE cycle_id=?1 AND (seen_scan IS NULL OR seen_scan!=?2)", params![cycle,scan])?;
+        self.connection.execute("UPDATE file_item SET present=0,error=CASE WHEN kind='partial' THEN 'Temporary file no longer present; never a completed original' ELSE 'Missing from latest completed traversal' END WHERE cycle_id=?1 AND (seen_scan IS NULL OR seen_scan!=?2)", params![cycle,scan])?;
         self.connection.execute("DELETE FROM candidate_group WHERE id IN (SELECT m.group_id FROM candidate_member m JOIN file_item f ON f.id=m.file_id WHERE f.cycle_id=?1 AND f.present=0)",[cycle])?;
         Ok(())
     }
@@ -316,7 +326,7 @@ impl Store {
         let (count, bytes, hashes, errors, unsupported) = self.connection.query_row(
             "SELECT COUNT(*),COALESCE(SUM(byte_count),0),COUNT(sha256),COALESCE(SUM(error IS NOT NULL),0),COALESCE(SUM(kind NOT IN ('image','sidecar')),0) FROM file_item WHERE cycle_id=?1 AND present=1", [cycle], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?,nonnegative_integer(r,2)?,nonnegative_integer(r,3)?,nonnegative_integer(r,4)?)))?;
         let missing = self.connection.query_row(
-            "SELECT COUNT(*) FROM file_item WHERE cycle_id=?1 AND present=0",
+            "SELECT COUNT(*) FROM file_item WHERE cycle_id=?1 AND present=0 AND kind!='partial'",
             [cycle],
             |r| nonnegative_integer(r, 0),
         )?;
@@ -325,7 +335,7 @@ impl Store {
             [scan],
             |r| nonnegative_integer(r, 0),
         )?;
-        let (successes, failures) = self.connection.query_row("SELECT COUNT(a.features_json),COUNT(a.error) FROM analysis a JOIN file_item f ON f.id=a.file_id WHERE f.cycle_id=?1 AND f.present=1 AND a.sha256=f.sha256", [cycle], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?)))?;
+        let (successes, failures, pending) = self.connection.query_row("SELECT COUNT(CASE WHEN a.error IS NULL THEN a.features_json END),COUNT(a.error),COUNT(CASE WHEN a.features_json IS NULL AND a.error IS NULL THEN 1 END) FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id=?1 AND f.present=1 AND f.kind='image' AND f.error IS NULL AND f.sha256 IS NOT NULL", params![cycle,iarchive_core::ALGORITHM_VERSION], |r| Ok((nonnegative_integer(r,0)?,nonnegative_integer(r,1)?,nonnegative_integer(r,2)?)))?;
         let version: u32 = self
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -353,6 +363,7 @@ impl Store {
             scan_issues: issues,
             image_successes: successes,
             image_errors: failures,
+            pending_images: pending,
             unsupported_visual_files: unsupported,
             local_replica: "NOT VERIFIED",
             replica_state: last.as_ref().map(|(_, state)| state.clone()),
@@ -432,9 +443,9 @@ impl Store {
     pub fn finish_scan(&mut self, cycle: &str, scan: i64, traversal_ok: bool) -> Result<()> {
         let tx = self.connection.transaction()?;
         if traversal_ok {
-            tx.execute("UPDATE file_item SET present=0,error='Missing from latest completed traversal' WHERE cycle_id=?1 AND (seen_scan IS NULL OR seen_scan!=?2)", params![cycle,scan])?;
+            tx.execute("UPDATE file_item SET present=0,error=CASE WHEN kind='partial' THEN 'Temporary file no longer present; never a completed original' ELSE 'Missing from latest completed traversal' END WHERE cycle_id=?1 AND (seen_scan IS NULL OR seen_scan!=?2)", params![cycle,scan])?;
         }
-        let errors: i64 = tx.query_row("SELECT COUNT(*) FROM file_item WHERE cycle_id=?1 AND (error IS NOT NULL OR present=0 OR sha256 IS NULL)", [cycle], |r| r.get(0))?;
+        let errors: i64 = tx.query_row("SELECT COUNT(*) FROM file_item WHERE cycle_id=?1 AND (present=1 OR kind!='partial') AND (error IS NOT NULL OR present=0 OR sha256 IS NULL)", [cycle], |r| r.get(0))?;
         let issues: i64 = tx.query_row(
             "SELECT COUNT(*) FROM scan_issue WHERE scan_id=?1",
             [scan],
@@ -876,15 +887,23 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].0, id);
         assert_eq!(saved[0].1.phash, features.phash);
-        for sql in [
-            "UPDATE file_item SET present=0 WHERE id=?1",
-            "UPDATE file_item SET error='unreadable' WHERE id=?1",
-            "UPDATE file_item SET kind='video' WHERE id=?1",
-            "UPDATE file_item SET sha256='changed' WHERE id=?1",
-            "UPDATE analysis SET sha256='stale' WHERE file_id=?1",
-            "UPDATE analysis SET algorithm_version='obsolete' WHERE file_id=?1",
-            "UPDATE analysis SET error='decode failed' WHERE file_id=?1",
-            "UPDATE analysis SET features_json=NULL WHERE file_id=?1",
+        assert_eq!(store.status("old").unwrap().pending_images, 0);
+        assert_eq!(store.status("old").unwrap().image_successes, 1);
+        for (sql, pending) in [
+            ("UPDATE file_item SET present=0 WHERE id=?1", 0),
+            ("UPDATE file_item SET error='unreadable' WHERE id=?1", 0),
+            ("UPDATE file_item SET kind='video' WHERE id=?1", 0),
+            ("UPDATE file_item SET sha256='changed' WHERE id=?1", 1),
+            ("UPDATE analysis SET sha256='stale' WHERE file_id=?1", 1),
+            (
+                "UPDATE analysis SET algorithm_version='obsolete' WHERE file_id=?1",
+                1,
+            ),
+            (
+                "UPDATE analysis SET error='decode failed' WHERE file_id=?1",
+                0,
+            ),
+            ("UPDATE analysis SET features_json=NULL WHERE file_id=?1", 1),
         ] {
             store.connection.execute_batch("SAVEPOINT stale").unwrap();
             store.connection.execute(sql, [id]).unwrap();
@@ -892,6 +911,9 @@ mod tests {
                 store.other_image_analysis("new").unwrap().is_empty(),
                 "{sql}"
             );
+            let status = store.status("old").unwrap();
+            assert_eq!(status.pending_images, pending, "{sql}");
+            assert_eq!(status.image_successes, 0, "{sql}");
             store
                 .connection
                 .execute_batch("ROLLBACK TO stale; RELEASE stale")

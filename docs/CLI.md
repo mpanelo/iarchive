@@ -35,6 +35,9 @@ Run from the checkout. Use one state directory and cycle for each workflow.
 Cycle IDs use ASCII letters, digits, `_` or `-`, up to 80 characters.
 `import` registers existing files; it does not download them.
 
+`cycles`, `status`, `index` and `audit` print short summaries by default. Use
+`--json` for full reports. Progress messages go to stderr.
+
 Replica paths must exist. Use `--allow-unverified-devices` only to acknowledge
 byte-only testing when physical independence cannot be proved. See
 [replication](replication.md) for conflicts and recovery.
@@ -47,6 +50,12 @@ worker and does not claim a complete visual audit.
 Exact and similar matches can include other cycles in the same state directory.
 Similarity uses their saved analysis without rescanning their media, so earlier
 drives can be disconnected. These are review suggestions, not fresh backup checks.
+
+After an interrupted download, finish it with your downloader, pause it, then
+rerun `audit` for that cycle. Unchanged images reuse cached analysis. Temporary
+files still present and missing originals block completion; retired temporary
+entries remain in manifest history. Local completion never proves cloud coverage.
+Audit still rehashes images before reusing their analysis.
 
 ## Exit codes
 

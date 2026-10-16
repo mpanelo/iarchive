@@ -6,7 +6,10 @@ use iarchive_core::{
 };
 use iarchive_fs::{LocalStorage, hash_file};
 use iarchive_store::Store;
-use std::path::Path;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 pub fn doctor(
     cli: &Cli,
@@ -81,7 +84,12 @@ fn scan(store: &mut Store, cycle: &str, deep: bool) -> Result<serde_json::Value>
     let mut hashed = 0u64;
     let mut cached = 0u64;
     let mut visited = 0u64;
-    tracing::info!("starting read-only inventory; prior completion invalidated");
+    let mut last_progress = Instant::now();
+    tracing::info!(
+        cycle,
+        deep,
+        "inventory started; prior completion invalidated"
+    );
     let result = (|| -> Result<()> {
         ensure!(
             root.is_dir(),
@@ -118,13 +126,15 @@ fn scan(store: &mut Store, cycle: &str, deep: bool) -> Result<serde_json::Value>
             }
             store.save_file(cycle, id, &fact)?;
             visited += 1;
-            if visited % 1000 == 0 {
+            if visited % 1000 == 0 || last_progress.elapsed() >= Duration::from_secs(2) {
                 tracing::info!(
+                    cycle,
                     files = visited,
                     hashes = hashed,
                     cache_hits = cached,
                     "inventory progress"
                 );
+                last_progress = Instant::now();
             }
             Ok(())
         })
@@ -139,9 +149,17 @@ fn scan(store: &mut Store, cycle: &str, deep: bool) -> Result<serde_json::Value>
         }
     }
     store.finish_scan(cycle, id, result.is_ok())?;
+    tracing::info!(
+        cycle,
+        files = visited,
+        hashes = hashed,
+        cache_hits = cached,
+        complete = store.status(cycle)?.inventory_complete,
+        "inventory finished"
+    );
     let exact = store.exact_groups(cycle)?;
     Ok(
-        serde_json::json!({"status":store.status(cycle)?,"hashes_computed":hashed,"hash_cache_hits":cached,"hash_cache_note":"path + size + mtime cache; not deep two-drive verification","exact_duplicate_groups":exact.into_iter().map(|members| members.into_iter().map(|(_,cycle,path)|serde_json::json!({"cycle":cycle,"relative_path":path})).collect::<Vec<_>>()).collect::<Vec<_>>(),"case_collisions":store.case_collisions(cycle)?,"scan_error":result.err().map(|e|format!("{e:#}"))}),
+        serde_json::json!({"status":store.status(cycle)?,"hashes_computed":hashed,"hash_cache_hits":cached,"hash_cache_note":"path + size + mtime cache; not deep two-drive verification","exact_duplicate_groups":exact.into_iter().map(|members| members.into_iter().map(|(_,cycle,path)|serde_json::json!({"cycle":cycle,"relative_path":path})).collect::<Vec<_>>()).collect::<Vec<_>>(),"case_collisions":store.case_collisions(cycle)?,"findings":store.findings(cycle)?,"scan_issues":store.scan_issues(cycle)?,"scan_error":result.err().map(|e|format!("{e:#}"))}),
     )
 }
 
@@ -249,8 +267,12 @@ pub fn audit(
             "worker not installed; run uv sync --project image-worker --group dev first (exact-only audit needs no Python)"
         );
     }
-    let _ = scan(store, cycle, false)?;
+    let inventory = scan(store, cycle, false)?;
     store.begin_audit(cycle)?;
+    let images = store.image_files(cycle)?;
+    let image_count = images.len();
+    tracing::info!(cycle, images = image_count, visual, "audit started");
+    let mut last_progress = Instant::now();
     let mut analyzer = UvAnalyzer {
         project,
         timeout: Duration::from_secs(timeout),
@@ -275,7 +297,7 @@ pub fn audit(
         }
     }
     if visual {
-        for (id, fact) in store.image_files(cycle)? {
+        for (id, fact) in images {
             let hash = fact
                 .sha256
                 .as_deref()
@@ -325,6 +347,17 @@ pub fn audit(
                 Ok(features) => analyzed.push((id, features)),
                 Err(_) => decode_errors += 1,
             };
+            if last_progress.elapsed() >= Duration::from_secs(2) {
+                tracing::info!(
+                    cycle,
+                    processed = analyzed.len() + decode_errors,
+                    images = image_count,
+                    cache_hits = hits,
+                    decode_errors,
+                    "audit progress"
+                );
+                last_progress = Instant::now();
+            }
         }
     }
     if categories.contains("exact") {
@@ -371,16 +404,24 @@ pub fn audit(
         }
     }
     let status = store.status(cycle)?;
-    let pending_images = store.image_files(cycle)?.len() != analyzed.len();
+    let pending_images = image_count != analyzed.len();
     let complete = status.inventory_complete
         && visual
         && decode_errors == 0
         && !pending_images
         && status.unsupported_visual_files == 0;
     store.finish_audit(cycle, complete)?;
+    tracing::info!(
+        cycle,
+        analyzed = analyzed.len(),
+        cache_hits = hits,
+        decode_errors,
+        complete,
+        "audit finished"
+    );
     emit(
         cli,
-        &serde_json::json!({"status":store.status(cycle)?,"analysis_cache_hits":hits,"decoded_images":analyzed.len()-hits,"analyzed_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree across the selected cycle and saved analysis from other cycles; at most 64 neighbors and one pair suggestion per current image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; other cycles are not rescanned; videos, RAW and unknown media are not visually audited"}),
+        &serde_json::json!({"status":store.status(cycle)?,"hashes_computed":inventory["hashes_computed"],"hash_cache_hits":inventory["hash_cache_hits"],"scan_error":inventory["scan_error"],"scan_issues":inventory["scan_issues"],"analysis_cache_hits":hits,"decoded_images":analyzed.len()-hits,"analyzed_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree across the selected cycle and saved analysis from other cycles; at most 64 neighbors and one pair suggestion per current image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; other cycles are not rescanned; videos, RAW and unknown media are not visually audited"}),
     )?;
     Ok(if visual {
         complete
@@ -394,7 +435,7 @@ pub fn report(cli: &Cli, store: &Store, cycle: &str) -> Result<bool> {
     }).collect::<Result<Vec<_>>>()?;
     emit(
         cli,
-        &serde_json::json!({"status":store.status(cycle)?,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"images":images,"case_collisions":store.case_collisions(cycle)?,"review_only":true}),
+        &serde_json::json!({"status":store.status(cycle)?,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"scan_issues":store.scan_issues(cycle)?,"images":images,"case_collisions":store.case_collisions(cycle)?,"review_only":true}),
     )?;
     Ok(true)
 }

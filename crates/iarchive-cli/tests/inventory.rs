@@ -112,6 +112,26 @@ fn inventory_round_trip() {
         std::fs::read(source.join("copy 旅行.PNG")).unwrap(),
         b"first"
     );
+    for (args, expected) in [
+        (vec!["status", "--cycle", "x"], "Cycle x: INDEXED"),
+        (
+            vec!["index", "--cycle", "x"],
+            "Inventory hashes: 0 read, 4 cached",
+        ),
+        (vec!["cycles"], "Saved archive cycles:"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_iarchive"))
+            .arg("--state-dir")
+            .arg(&state)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let summary = String::from_utf8(output.stdout).unwrap();
+        assert!(summary.contains(expected), "{summary}");
+        assert!(summary.contains("NOT VERIFIED"), "{summary}");
+        assert!(serde_json::from_str::<serde_json::Value>(&summary).is_err());
+    }
 }
 #[test]
 fn incomplete_sources_block_index() {
@@ -138,6 +158,40 @@ fn incomplete_sources_block_index() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["status"]["missing_files"], 1);
     assert_eq!(json["status"]["inventory_complete"], false);
+    std::fs::rename(source.join("copy.partial"), source.join("completed.JPG")).unwrap();
+    let output = run(&state, &["index", "--cycle", "x"]);
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["status"]["missing_files"], 1,
+        "missing original must still block"
+    );
+    assert_eq!(json["findings"].as_array().unwrap().len(), 1);
+    std::fs::write(source.join("photo.JPG"), b"photo").unwrap();
+    let recovered = value(run(&state, &["index", "--cycle", "x"]));
+    assert_eq!(recovered["status"]["inventory_complete"], true);
+    assert_eq!(recovered["status"]["missing_files"], 0);
+    assert_eq!(recovered["status"]["file_errors"], 0);
+    assert_eq!(recovered["hashes_computed"], 1);
+    assert_eq!(recovered["hash_cache_hits"], 1);
+    let store = iarchive_store::Store::open_readonly(&state.join("manifest.sqlite")).unwrap();
+    let mut history = Vec::new();
+    store
+        .visit_manifest("x", &mut |record| {
+            history.push(record);
+            Ok(())
+        })
+        .unwrap();
+    let partial = history
+        .iter()
+        .find(|r| r["relative_path"] == "copy.partial")
+        .unwrap();
+    assert_eq!(partial["present"], false);
+    assert!(
+        partial["sha256"].is_null(),
+        "partial was never a completed original"
+    );
+    drop(store);
     std::fs::rename(&source, dir.path().join("disconnected")).unwrap();
     assert_eq!(
         run(&state, &["index", "--cycle", "x"]).status.code(),

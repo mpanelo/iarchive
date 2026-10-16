@@ -1,4 +1,5 @@
 mod operations;
+mod output;
 mod quarantine;
 mod relationships;
 mod replication;
@@ -177,6 +178,9 @@ fn main() -> ExitCode {
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)
+            .with_target(false)
+            .without_time()
+            .with_ansi(false)
             .init();
     }
     match run(&cli) {
@@ -314,6 +318,10 @@ fn lock_state(state: &Path) -> Result<File> {
 fn emit(cli: &Cli, value: &impl Serialize) -> Result<()> {
     if cli.json {
         println!("{}", serde_json::to_string(value)?);
+    } else if !cli.dry_run
+        && let Some(summary) = output::summary(&cli.command, &serde_json::to_value(value)?)
+    {
+        println!("{summary}");
     } else {
         println!("{}", serde_json::to_string_pretty(value)?);
     }
