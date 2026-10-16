@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from probe import AUTH_REQUESTS, ProbeBlocked, allowed_request, discover_zones, new_run, request_guard
+from probe import (AUTH_REQUESTS, ProbeBlocked, allowed_request, authenticated_account,
+                   discover_zones, new_run, request_guard)
 
 
 ROOT = "https://p123-ckdatabasews.icloud.com"
@@ -108,6 +109,17 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(result["private"][0]["zone_id"], identity)
         self.assertNotIn("ownerRecordName", result["shared"][0]["zone_id"])
+
+    def test_authenticated_account_requires_agreement(self):
+        for response, request in ((1234, "1234"), ("1234", 1234), ("synthetic-account", None)):
+            service = SimpleNamespace(data={"dsInfo": {"dsid": response}}, params={"dsid": request})
+            with self.subTest(response=response):
+                self.assertEqual(authenticated_account(service), str(response))
+        for response, request in ((None, "1234"), ("1234", "different"), (True, "True"),
+                                  (0, "0"), (1.5, "1.5"), (" ", None), ("1234", False)):
+            service = SimpleNamespace(data={"dsInfo": {"dsid": response}}, params={"dsid": request})
+            with self.subTest(response=response, request=request), self.assertRaises(ProbeBlocked):
+                authenticated_account(service)
 
     def test_library_failure_is_reported(self):
         service = self.service({"private": {"zones": []}, "shared": RuntimeError("SECRET_TOKEN")})

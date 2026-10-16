@@ -11,6 +11,7 @@ any live run.** Nothing modifies Photos records or enables removal.
 | `album` | One approved album's metadata. |
 | `originals` | Exactly two approved originals from a completed baseline. |
 | `variants` | Four originals, one motion companion and one full-image rendition from a four-asset baseline. |
+| `changes` | Identity/version changes across one separately approved private zone. |
 
 Unexpected endpoints, queries, redirects and resource selections are blocked.
 This is a bounded experiment, not a complete cloud inventory.
@@ -59,6 +60,10 @@ tools/cloud-probe/run-macos.command album --album 'Synthetic test album' --expec
 Type `READ ONLY ALBUM`. Use `--expected-assets 2` for the two-item fixture.
 Unexpected counts stop the run before asset enumeration.
 
+New captures bind the authenticated account ID privately in `album-private.json`
+and `resource-report-private.json`; it is never printed in the summary. Zone IDs
+retain their full returned structure. Missing owner identity stays unknown.
+
 The probe rejects missing, duplicate or incomplete album matches. It makes two
 metadata passes, bounded to 1,000 assets, comparing membership, full identities,
 change tags and resource metadata. Membership, asset and master records stay
@@ -101,9 +106,103 @@ expected field lists. Live runs currently use `expectation_status: NOT PROVIDED`
 Even `MATCHED OBSERVED FIELDS` proves metadata agreement only. Unrequested or
 unknown variants may remain undiscovered.
 
+## Investigate a change feed
+
+A live traversal completed in two linked batches: 113 initial pages containing
+10,912 metadata records, then one empty delta page. An earlier 10-page experiment
+stopped at its cap. After a Favorite toggle in a four-item test album, exactly
+one asset changed version tag. A one-page delta returned that same full asset ID
+and the tag seen in a fresh album capture, plus three unrelated metadata records.
+Membership, master records and other requested asset fields stayed unchanged.
+The Favorite value itself was not requested. New-upload detection and an atomic
+guard against later changes remain unverified.
+
+This scope reads beyond an album. Agree on the account and entire private zone
+first; prefer a disposable account. Earlier album approval does not cover this scope.
+
+After separate approval, use the exact name and owner returned by library
+discovery. Replace both example values:
+
+```sh
+tools/cloud-probe/run-macos.command changes --zone-name 'approved-zone' --zone-owner 'returned-owner'
+```
+
+Type `READ ONLY CHANGES`. Authentication and private/shared zone discovery happen
+first; record requests are restricted to the selected private zone's full identity.
+Missing owners, deleted zones, ambiguous matches and the default zone are refused.
+There is no album filter. Keep zone identities and outputs private.
+
+The probe requests only record IDs, types and version tags, across all record
+types. It drains an initial feed and one follow-up delta. Changes and tombstones
+remain separate observations; unknown types are preserved. Other returned record
+fields, including captions, locations, URLs and keys, are discarded.
+
+Both phases share limits: 100 pages, 10,000 records and 8 MiB of response bytes,
+with at most 100 records and 2 MiB per page. A 120-second budget is checked between
+reads; connection/read timeouts are 10/30 seconds. Redirects, transport retries,
+expired tokens, non-progressing tokens and incomplete responses stop the run.
+There is no automatic restart or chaining of batches.
+
+After separate approval, continue one batch from a run stopped by its page,
+record or time budget. Replace the example run name:
+
+```sh
+tools/cloud-probe/run-macos.command changes --continue-from cloud-probe-example
+```
+
+The checkpoint supplies the zone. The probe validates all linked reports and
+tokens, then requires the same authenticated account and full discovered zone
+before record requests. Each batch uses fresh output and the same per-run limits.
+Once the initial feed ends, it starts or continues the follow-up delta.
+
+Keep every linked run. Missing, edited, unsafe or inconsistent history blocks
+continuation, as do throttled or otherwise failed source runs. History is bounded
+to 20 runs including the new batch and 64 MiB of input reports. Expired tokens
+never trigger a restart. Report hashes detect changes to earlier linked bytes;
+they do not authenticate the reports.
+
+After separate approval, request one new delta from a **completed** capture:
+
+```sh
+tools/cloud-probe/run-macos.command changes --since-run cloud-probe-completed
+```
+
+This validates the completed reports, final token and linked history, then uses
+the same account, full zone, pacing and limits. It never repeats the initial
+traversal or polls automatically. Budget-stopped runs use `--continue-from`.
+
+A controlled edit test uses fresh metadata for the disposable test album. After
+the baseline is confirmed, toggle Favorite on one item and run one approved delta.
+Compare exact asset IDs and version tags with a fresh album capture. An observed
+tag change demonstrates visibility only; it does not prove Favorite semantics,
+complete coverage or an atomic guard against later changes.
+
+Change-feed request starts are at least one second apart. Slow responses count
+toward that interval. HTTP 429/503, CloudKit throttling errors or a server retry
+delay stop the run without another request. The summary reports
+`retry_after_seconds` when supplied; wait at least that long before any separately
+approved retry. Missing or invalid delays stay unknown. When both the HTTP header
+and JSON body supply delays, the longer delay applies. See Apple's
+[throttling guidance](https://developer.apple.com/documentation/technotes/tn3162-understanding-cloudkit-throttles).
+
+Tokens and sanitized pages stay in private files. Each page is saved before the
+next request. Only `summary.json` with `change_feed_completed: true` establishes
+that both phases finished across the validated chain. Partial pages never
+establish completion. Per-run counts and cumulative observation counts are
+separate; neither is a count of unique photos.
+
+The request shape follows Apple's [CloudKit change-feed documentation](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/FetchingRecordZoneChanges%28changeszone%29.html).
+Photos accepted the initial paginated requests. Reaching the end of a feed does not prove
+complete library/resource coverage, an atomic snapshot, completed iPhone uploads
+or protection against changes after the final read. These remain unverified;
+there is no cloud modification or removal command.
+
 ## Download two originals
 
 Requires separate download approval and a completed two-asset/two-master baseline.
+Older baselines without an account binding need a fresh metadata capture.
+An account mismatch stops the run before library or album queries.
+
 Replace `cloud-probe-example` with that run's basename:
 
 ```sh
@@ -165,6 +264,9 @@ Every run creates `.smoke/cloud-probe-<id>`:
 | `download-plan-private.json`, progress files | Approved bindings and per-file progress. |
 | `download-manifest-private.json` | Completed local copy checks. |
 | `post-download-private.json` | Sanitized final metadata. |
+| `changes-context-private.json` | Account and full zone binding for a change-feed attempt. |
+| `changes-page-*-private.json` | Sanitized change events and tokens, including partial progress. |
+| `changes-private.json` | Final token and phase counts after a completed change-feed capture. |
 
 Do not upload or commit private reports, media or cookies. macOS run directories
 use mode `0700` and a restrictive umask. Raw responses, signed URLs, wrapping

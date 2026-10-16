@@ -64,14 +64,16 @@ def allowed_request(method: str, url: str, discover: bool, photo_root: str | Non
 
 
 @contextmanager
-def request_guard(discover: bool, album: bool = False, downloads: bool = False):
+def request_guard(discover: bool, album: bool = False, downloads: bool = False,
+                  changes: bool = False):
     from requests.adapters import HTTPAdapter
 
     send = HTTPAdapter.send
     state = {"photo_root": None, "approved_zone": None, "approved_album": None,
              "authentication_requests": 0, "zone_requests": 0,
              "album_metadata_requests": 0, "asset_metadata_requests": 0,
-             "approved_download_urls": set(), "original_download_requests": 0}
+             "approved_download_urls": set(), "original_download_requests": 0,
+             "change_request": None, "change_metadata_requests": 0}
 
     def guarded(adapter, request, **kwargs):
         kind = None
@@ -85,6 +87,18 @@ def request_guard(discover: bool, album: bool = False, downloads: bool = False):
                 kind = "authentication_requests" if (
                     request.method.upper(), parsed.hostname, parsed.path
                 ) in AUTH_REQUESTS else "zone_requests"
+            elif changes and state["photo_root"]:
+                from changes import request_matches, strict_json
+                root = urlsplit(state["photo_root"])
+                prefix = root.path.rstrip("/") + "/database/1/com.apple.photos.cloud/production/private"
+                origin_ok = allowed_request(request.method, parsed._replace(
+                    path=prefix + "/zones/list").geturl(), True, state["photo_root"])
+                raw = request.body.encode("utf-8") if isinstance(request.body, str) else request.body
+                if (origin_ok and parsed.path == prefix + "/changes/zone"
+                        and state["change_request"] is not None
+                        and raw == state["change_request"].encode("utf-8")
+                        and request_matches(strict_json(raw), state["approved_zone"])):
+                    kind = "change_metadata_requests"
             elif album and state["photo_root"]:
                 from album import query_kind
                 root = urlsplit(state["photo_root"])
@@ -101,6 +115,11 @@ def request_guard(discover: bool, album: bool = False, downloads: bool = False):
             kind = None
         if not kwargs.get("verify", True) or kind is None:
             raise ProbeBlocked("A request outside the approved probe scope was blocked")
+        if kind == "change_metadata_requests":
+            # Single-use body: redirects and upstream retries cannot replay it.
+            state["change_request"] = None
+            if adapter.max_retries.total != 0:
+                raise ProbeBlocked("Change-feed transport retries must be disabled")
         state[kind] += 1
         if kind == "original_download_requests":
             state["approved_download_urls"].remove(request.url)
@@ -154,6 +173,27 @@ def reuse_cookies(repo: Path, name: str) -> Path:
     return cookies
 
 
+def normalize_account_id(value) -> str:
+    if type(value) is int and value > 0:
+        return str(value)
+    if (isinstance(value, str) and value and len(value) <= 2048
+            and not any(char.isspace() or ord(char) < 32 for char in value)):
+        return value
+    raise ProbeBlocked("Authenticated account identity is missing or malformed")
+
+
+def authenticated_account(service) -> str:
+    """Use the authenticated response, never the entered email or an old baseline."""
+    info = service.data.get("dsInfo")
+    if not isinstance(info, dict) or not isinstance(service.params, dict):
+        raise ProbeBlocked("Authenticated account evidence is malformed")
+    account = normalize_account_id(info.get("dsid"))
+    request_account = service.params.get("dsid")
+    if request_account is not None and normalize_account_id(request_account) != account:
+        raise ProbeBlocked("Authenticated account identities conflict")
+    return account
+
+
 def read_baseline(repo: Path, name: str, expected_assets: int = 2) -> dict:
     run = reuse_cookies(repo, name).parent
     summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
@@ -165,6 +205,10 @@ def read_baseline(repo: Path, name: str, expected_assets: int = 2) -> dict:
     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
         raise ProbeBlocked("Baseline metadata path contains a link or reparse point")
     value = json.loads(path.read_text(encoding="utf-8"))
+    account = value.get("account_id")
+    if (summary.get("account_binding_recorded") is not True or not isinstance(account, str)
+            or not account or normalize_account_id(account) != account or value.get("database") != "private"):
+        raise ProbeBlocked("Baseline lacks a recorded account binding; capture a fresh metadata baseline")
     from originals import snapshot
     from album import canonical
     if len(value.get("passes", [])) != 2 or canonical(snapshot(value["passes"][0])) != canonical(snapshot(value["passes"][1])):
@@ -221,14 +265,28 @@ def verify_second_factor(service) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scope", choices=("auth", "libraries", "album", "originals", "variants"))
+    parser.add_argument("scope", choices=("auth", "libraries", "album", "originals", "variants", "changes"))
     parser.add_argument("--album", help="Exact name of the explicitly approved test album")
     parser.add_argument("--reuse-session", help="Authenticated cloud-probe run basename under .smoke")
     parser.add_argument("--baseline", help="Successful album metadata run under .smoke matching the download scope")
     parser.add_argument("--expected-assets", type=int, choices=(2, 4),
                         help="Require this album count before metadata enumeration (album scope only)")
+    parser.add_argument("--zone-name", help="Exact separately approved private zone name (changes only)")
+    parser.add_argument("--zone-owner", help="Exact returned private zone owner (changes only)")
+    checkpoint_args = parser.add_mutually_exclusive_group()
+    checkpoint_args.add_argument("--continue-from", help="Budget-stopped change-feed run basename under .smoke")
+    checkpoint_args.add_argument("--since-run", help="Completed change-feed run basename for one new delta")
     args = parser.parse_args()
     downloads = args.scope in ("originals", "variants")
+    checkpoint_name = args.continue_from if args.continue_from is not None else args.since_run
+    if checkpoint_name is not None and args.scope != "changes":
+        parser.error("Checkpoint options are allowed only for the changes scope")
+    if checkpoint_name is not None and (args.zone_name is not None or args.zone_owner is not None):
+        parser.error("Continuation uses its recorded zone; omit --zone-name and --zone-owner")
+    if checkpoint_name is None and ((args.scope == "changes") != bool(args.zone_name and args.zone_owner) or (
+        args.scope != "changes" and (args.zone_name is not None or args.zone_owner is not None)
+    )):
+        parser.error("--zone-name and --zone-owner are required only for the changes scope")
     expected_assets = args.expected_assets if args.scope == "album" else 4 if args.scope == "variants" else 2
     if args.expected_assets is not None and args.scope != "album":
         parser.error("--expected-assets is allowed only for the album scope")
@@ -244,7 +302,19 @@ def main() -> int:
         return 2
     phrase = ("DOWNLOAD SIX RESOURCES" if args.scope == "variants" else
               "DOWNLOAD TWO ORIGINALS" if args.scope == "originals" else "READ ONLY " + args.scope.upper())
-    if args.scope == "variants":
+    if args.scope == "changes":
+        from changes import MAX_PAGES, MAX_RECORDS
+        print("Scope: identity/version metadata across ONE approved private zone, beyond any test album.")
+        print(f"At most {MAX_PAGES} pages, {MAX_RECORDS} records and 8 MiB in this batch.")
+        print("Request starts are at least one second apart. A server-requested pause stops the run.")
+        print("120-second budget checked between reads; 30-second read timeout. No automatic retry.")
+        print("No captions, locations, resource fields, media downloads or modification requests.")
+        print("Live use requires separate approval, preferably with a disposable account.")
+        if args.continue_from is not None:
+            print("Continue one bounded batch from validated private checkpoints; no automatic chaining.")
+        elif args.since_run is not None:
+            print("Read one new delta from a validated completed capture; no automatic polling.")
+    elif args.scope == "variants":
         print(f"Scope: four originals, one motion companion and one full image from {args.album!r}.")
         print("Exactly four baseline assets; six resources, 32 MiB each and 64 MiB total at most.")
         print("Two local copies and independent hashes. No previews or Photos modifications/removal.")
@@ -275,15 +345,30 @@ def main() -> int:
               "album_metadata_completed": False,
               "original_download_completed": False,
               "resource_download_completed": False,
+              "change_feed_completed": False,
               "cloud_coverage": "NOT VERIFIED", "removal_feasibility": "NOT VERIFIED",
               "photo_inventory_requested": False, "media_download_requested": False}
+    if args.scope == "changes":
+        from changes import MAX_SECONDS, MAX_TOTAL_BYTES, MIN_REQUEST_INTERVAL
+        report["change_feed_limits"] = {
+            "pages": MAX_PAGES, "records": MAX_RECORDS, "response_bytes": MAX_TOTAL_BYTES,
+            "seconds": MAX_SECONDS, "request_interval_seconds": MIN_REQUEST_INTERVAL,
+        }
+        report["change_feed_mode"] = ("new_delta" if args.since_run is not None else
+                                      "continuation" if args.continue_from is not None else "initial_and_delta")
     try:
         repo = Path(__file__).resolve().parents[2]
         run = new_run(repo)
         print(f"Private output directory: {run}")
         cookies = reuse_cookies(repo, args.reuse_session) if args.reuse_session else run / "cookies"
         baseline = read_baseline(repo, args.baseline, expected_assets) if args.baseline else None
-        with request_guard(args.scope != "auth", args.scope in ("album", "originals", "variants"), downloads) as transport:
+        continuation = None
+        if checkpoint_name is not None:
+            from changes import load_continuation
+            report["phase"] = "continuation_check"
+            continuation = load_continuation(repo, checkpoint_name, completed=args.since_run is not None)
+        with request_guard(args.scope != "auth", args.scope in ("album", "originals", "variants"),
+                           downloads, changes=args.scope == "changes") as transport:
             report["phase"] = "authentication"
             account = getpass.getpass("Apple account email (hidden, local only): ").strip()
             if not account:
@@ -300,6 +385,13 @@ def main() -> int:
             if not service.data.get("dsInfo"):
                 raise ProbeBlocked("Authentication evidence is missing")
             report["authenticated"] = True
+            account_id = None
+            if args.scope in ("album", "originals", "variants", "changes"):
+                account_id = authenticated_account(service)
+                if baseline is not None and baseline["account_id"] != account_id:
+                    raise ProbeBlocked("Baseline belongs to a different authenticated account")
+                if continuation is not None and continuation["account_id"] != account_id:
+                    raise ProbeBlocked("Checkpoint belongs to a different authenticated account")
             if args.scope != "auth":
                 report["phase"] = "library_discovery"
                 photo_root = service._get_webservice_url("ckdatabasews")
@@ -315,6 +407,38 @@ def main() -> int:
                     key: [bool(zone["zone_id"].get("ownerRecordName")) for zone in value]
                     for key, value in zones.items()
                 }
+            if args.scope == "changes":
+                from changes import collect_changes, select_zone
+                if not report["library_discovery_completed"]:
+                    raise ProbeBlocked("Library discovery was incomplete")
+                if authenticated_account(service) != account_id:
+                    raise ProbeBlocked("Authenticated account changed during library discovery")
+                zone_name = continuation["zone_id"]["zoneName"] if continuation else args.zone_name
+                zone_owner = continuation["zone_id"]["ownerRecordName"] if continuation else args.zone_owner
+                zone = select_zone(zones, zone_name, zone_owner)
+                if continuation is not None:
+                    from changes import canonical
+                    if canonical(zone) != canonical(continuation["zone_id"]):
+                        raise ProbeBlocked("Checkpoint full zone identity changed")
+                report["phase"] = "change_feed"
+                report["photo_inventory_requested"] = True
+                save_new(run / "changes-context-private.json", {
+                    "account_id": account_id, "database": "private", "zone_id": zone,
+                    "complete": False,
+                    **({"delta_from" if args.since_run is not None else "continuation": continuation["source"]}
+                       if continuation is not None else {}),
+                })
+                def change_progress(page, value):
+                    if authenticated_account(service) != account_id:
+                        raise ProbeBlocked("Authenticated account changed during change-feed capture")
+                    save_new(run / f"changes-page-{page}-private.json", value)
+                private, change_report = collect_changes(service, photo_root, zone, transport, change_progress,
+                                                        expected_account=account_id, continuation=continuation)
+                if authenticated_account(service) != account_id:
+                    raise ProbeBlocked("Authenticated account changed during change-feed capture")
+                save_new(run / "changes-private.json", {"account_id": account_id, **private})
+                report.update(change_report)
+                report["account_binding_recorded"] = True
             if args.scope in ("album", "originals", "variants"):
                 from album import collect_album
                 if not report["library_discovery_completed"]:
@@ -329,10 +453,15 @@ def main() -> int:
                 private, album_report = collect_album(service, photo_root, zones, args.album, transport, progress,
                                                       resource_urls, download_fields,
                                                       expected_assets)
+                if authenticated_account(service) != account_id:
+                    raise ProbeBlocked("Authenticated account changed during metadata capture")
+                private.update(account_id=account_id, database="private")
                 save_new(run / "album-private.json", private)
                 report.update(album_report)
+                report["account_binding_recorded"] = True
                 save_new(run / "resource-report-private.json", {
-                    "database": "private", "zone_id": private["zone_id"], "album_id": private["album_id"],
+                    "account_id": account_id, "database": "private",
+                    "zone_id": private["zone_id"], "album_id": private["album_id"],
                     "metadata_passes_match": report["two_passes_match"], **private["resource_report"],
                 })
                 if not report["two_passes_match"]:
@@ -341,10 +470,8 @@ def main() -> int:
             if downloads:
                 from originals import run_downloads, select_originals, select_variants, snapshot
                 from album import canonical, collect_pass
-                identity = service.data["dsInfo"].get("dsid") or service.params.get("dsid")
-                identity = str(identity) if isinstance(identity, (str, int)) and not isinstance(identity, bool) else None
                 select = select_variants if args.scope == "variants" else select_originals
-                plans = select(baseline, private, resource_urls, identity)
+                plans = select(baseline, private, resource_urls, account_id)
                 report["phase"] = "resource_download"
                 report["media_download_requested"] = True
                 report.update(run_downloads(service.session, plans, run, transport, save_new))
@@ -353,6 +480,8 @@ def main() -> int:
                                      lambda page, value: progress(3, page, value),
                                      expected_count=expected_assets)
                 save_new(run / "post-download-private.json", after)
+                if authenticated_account(service) != account_id:
+                    raise ProbeBlocked("Authenticated account changed during the resource download test")
                 if canonical(snapshot(after)) != canonical(snapshot(private["passes"][-1])):
                     raise ProbeBlocked("Album metadata changed during the resource download test")
                 report["post_download_metadata_matches"] = True
@@ -364,8 +493,12 @@ def main() -> int:
         report["blocked"] = type(error).__name__
         from album import AlbumBlocked
         from originals import DownloadBlocked
-        if isinstance(error, (ProbeBlocked, AlbumBlocked, DownloadBlocked)):
+        from changes import ChangesBlocked, ChangesThrottled
+        if isinstance(error, (ProbeBlocked, AlbumBlocked, DownloadBlocked, ChangesBlocked)):
             report["finding"] = str(error)
+        if isinstance(error, ChangesThrottled):
+            report["rate_limited"] = True
+            report["retry_after_seconds"] = error.retry_after_seconds
         if isinstance(error, AlbumBlocked) and error.diagnostics:
             report["diagnostics"] = error.diagnostics
         print("Probe stopped. Upstream error details are suppressed to protect credentials.")
@@ -374,7 +507,7 @@ def main() -> int:
             if transport is not None:
                 report["request_counts"] = {key: transport[key] for key in (
                     "authentication_requests", "zone_requests", "album_metadata_requests", "asset_metadata_requests",
-                    "original_download_requests")}
+                    "original_download_requests", "change_metadata_requests")}
             save_new(run / "summary.json", report)
         os.umask(old_mask)
     print(json.dumps(report, indent=2))

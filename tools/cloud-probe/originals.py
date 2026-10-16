@@ -56,7 +56,14 @@ def select_resources(baseline, current, urls, account_id, asset_count, field_cou
                      max_bytes, max_total=None):
     if not isinstance(account_id, str) or not account_id:
         raise DownloadBlocked("Authenticated account identity is missing")
-    if (baseline["zone_id"] != current["zone_id"] or baseline["album_id"] != current["album_id"]
+    if any(value.get("account_id") != account_id or value.get("database") != "private"
+           for value in (baseline, current)):
+        raise DownloadBlocked("Approved account binding is missing or changed")
+    if any(not isinstance(value.get("zone_id"), dict)
+           or not isinstance(value["zone_id"].get("zoneName"), str) or not value["zone_id"]["zoneName"]
+           for value in (baseline, current)):
+        raise DownloadBlocked("Library zone identity is missing or malformed")
+    if (canonical(baseline["zone_id"]) != canonical(current["zone_id"]) or baseline["album_id"] != current["album_id"]
             or canonical(snapshot(baseline["passes"][-1])) != canonical(snapshot(current["passes"][-1]))):
         raise DownloadBlocked("Approved identities or resource metadata changed since the baseline")
     now = current["passes"][-1]

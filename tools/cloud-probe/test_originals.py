@@ -40,6 +40,7 @@ def inventory():
     responses += copy.deepcopy(one) + copy.deepcopy(one)
     private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,
                                {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {})
+    private.update(account_id="synthetic-account", database="private")
     urls = {("CPLMaster", f"full-master-{number}", "resOriginalRes"): url for number, url in enumerate(URLS, 1)}
     return private, urls
 
@@ -59,6 +60,7 @@ def variant_inventory():
     private, _ = collect_album(fixtures.AlbumTests().service(responses), ROOT,
                                {"private": [{"zone_id": ZONE, "deleted": False}]}, NAME, {},
                                resource_urls=urls, download_fields=tuple(VARIANT_COUNTS), expected_count=4)
+    private.update(account_id="synthetic-account", database="private")
     return private, urls
 
 
@@ -163,7 +165,8 @@ class OriginalTests(unittest.TestCase):
         baseline = self.run / '.smoke/cloud-probe-baseline'
         (baseline / 'cookies').mkdir(parents=True)
         save_new(baseline / 'summary.json', {'schema': 1, 'authenticated': True, 'provider_version': PIN,
-                 'scope': 'album', 'album_metadata_completed': True, 'two_passes_match': True, 'observed_assets': 4})
+                 'scope': 'album', 'album_metadata_completed': True, 'two_passes_match': True,
+                 'account_binding_recorded': True, 'observed_assets': 4})
         save_new(baseline / 'album-private.json', private)
         with self.assertRaisesRegex(ProbeBlocked, 'required asset count'):
             read_baseline(self.run, baseline.name)
@@ -182,8 +185,9 @@ class OriginalTests(unittest.TestCase):
                     entry['value'].setdefault('downloadURL', 'https://cvws.icloud-content.com/unapproved-preview')
             raw_records.append(raw)
         one = [fixtures.count_response(4), {'records': raw_records}, {'records': []}, fixtures.count_response(4)]
-        for drift in (False, True):
-            with self.subTest(post_download_drift=drift), Session() as session:
+        for scenario in ('complete', 'drift', 'wrong-account'):
+            drift = scenario == 'drift'
+            with self.subTest(scenario=scenario), Session() as session:
                 final = copy.deepcopy(one)
                 if drift:
                     final[1]['records'][0]['recordChangeTag'] = 'post-download-change'
@@ -191,10 +195,10 @@ class OriginalTests(unittest.TestCase):
                     [{'records': [album_record()]}] + copy.deepcopy(one) * 2 + final)
                 session.post = service.session.post
                 service.session = session
-                service.data = {'dsInfo': {'dsid': 'synthetic-account'}}
+                service.data = {'dsInfo': {'dsid': 'different-account' if scenario == 'wrong-account' else 'synthetic-account'}}
                 service.requires_2fa = service.requires_2sa = False
                 service._get_webservice_url = lambda name: ROOT
-                run = self.run / ('drift-run' if drift else 'complete-run')
+                run = self.run / (scenario + '-run')
                 run.mkdir()
                 output, calls = io.StringIO(), []
 
@@ -217,10 +221,18 @@ class OriginalTests(unittest.TestCase):
                         patch('probe.getpass.getpass', return_value='fake@example.invalid'), \
                         patch('probe.new_run', return_value=run), patch('probe.logging.disable'), \
                         patch('probe.read_baseline', side_effect=lambda repo, name, count: read_baseline(self.run, name, count)), \
-                        patch('probe.discover_zones', return_value=({'private': [{'zone_id': ZONE, 'deleted': False}], 'shared': []}, [])), \
+                        patch('probe.discover_zones', return_value=({'private': [{'zone_id': ZONE, 'deleted': False}], 'shared': []}, [])) as discovery, \
                         redirect_stdout(output):
-                    self.assertEqual(probe.main(), int(drift))
+                    self.assertEqual(probe.main(), int(scenario != 'complete'))
                 summary = json.loads((run / 'summary.json').read_text())
+                if scenario == 'wrong-account':
+                    discovery.assert_not_called()
+                    self.assertEqual(service.calls, [])
+                    self.assertEqual(calls, [])
+                    self.assertIn('different authenticated account', summary['finding'])
+                    self.assertFalse((run / 'album-private.json').exists())
+                    self.assertNotIn('different-account', output.getvalue())
+                    continue
                 self.assertEqual(set(calls), set(urls.values()))
                 self.assertEqual(len(calls), 6)
                 self.assertEqual(summary['request_counts']['original_download_requests'], 6)
@@ -246,6 +258,7 @@ class OriginalTests(unittest.TestCase):
     def test_baseline_drift_blocks_selection(self):
         mutations = (lambda value: value.update(album_id="different-album"),
                          lambda value: value.update(zone_id={"zoneName": "wrong"}),
+                         lambda value: value["zone_id"].update(ownerRecordName="different-owner"),
                          lambda value: value["passes"][-1]["assets"][0].update(recordName="new-upload"),
                          lambda value: value["passes"][-1]["assets"][0].update(recordChangeTag="changed"),
                          lambda value: value["passes"][-1]["masters"][0].update(recordChangeTag="changed"),
@@ -258,6 +271,15 @@ class OriginalTests(unittest.TestCase):
                 with self.subTest(scope=select.__name__, mutation=number), self.assertRaisesRegex(
                         DownloadBlocked, 'Approved identities or resource metadata changed'):
                     select(private, current, urls, "synthetic-account")
+
+    def test_account_binding_blocks_selection(self):
+        for field, value in (("account_id", None), ("account_id", "different-account"),
+                             ("database", "shared")):
+            for side in ("baseline", "current"):
+                baseline, current = copy.deepcopy(self.private), copy.deepcopy(self.private)
+                (baseline if side == "baseline" else current)[field] = value
+                with self.subTest(side=side, field=field), self.assertRaisesRegex(DownloadBlocked, "account binding"):
+                    select_originals(baseline, current, self.urls, "synthetic-account")
 
     def test_selection_requires_unambiguous_owners(self):
         for mutation in (lambda value: value["passes"][-1]["assets"].pop(),
@@ -399,10 +421,19 @@ class OriginalTests(unittest.TestCase):
         run = self.run / ".smoke/cloud-probe-synthetic"
         (run / "cookies").mkdir(parents=True)
         summary = {"schema": 1, "authenticated": True, "provider_version": PIN, "scope": "album",
-                   "album_metadata_completed": True, "two_passes_match": True, "observed_assets": 2}
+                   "album_metadata_completed": True, "two_passes_match": True, "observed_assets": 2,
+                   "account_binding_recorded": True}
         save_new(run / "summary.json", summary)
         save_new(run / "album-private.json", self.private)
         self.assertEqual(read_baseline(self.run, run.name), self.private)
+        for target, field in ((summary, "account_binding_recorded"), (self.private, "account_id")):
+            original = target.pop(field)
+            (run / "summary.json").write_text(json.dumps(summary))
+            (run / "album-private.json").write_text(json.dumps(self.private))
+            with self.subTest(missing=field), self.assertRaisesRegex(ProbeBlocked, "fresh metadata baseline"):
+                read_baseline(self.run, run.name)
+            target[field] = original
+        (run / "album-private.json").write_text(json.dumps(self.private))
         summary["album_metadata_completed"] = False
         (run / "summary.json").write_text(json.dumps(summary))
         with self.assertRaises(ProbeBlocked):

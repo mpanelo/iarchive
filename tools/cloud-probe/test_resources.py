@@ -271,6 +271,9 @@ class ResourceTests(unittest.TestCase):
                     redirect_stdout(output):
                 self.assertEqual(probe.main(), 0)
             private = json.loads((run / "resource-report-private.json").read_text())
+            self.assertEqual(private["account_id"], "synthetic-account")
+            baseline = json.loads((run / "album-private.json").read_text())
+            self.assertEqual(baseline["account_id"], private["account_id"])
             self.assertEqual(private["database"], "private")
             self.assertEqual(private["zone_id"], fixtures.ZONE)
             self.assertEqual(private["album_id"], fixtures.ALBUM)
@@ -278,6 +281,8 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual(len(private["resources"]), 12)
             self.assertNotIn("SECRET", json.dumps(private))
             summary = json.loads((run / "summary.json").read_text())
+            self.assertTrue(summary["account_binding_recorded"])
+            self.assertNotIn("account_id", summary)
             self.assertTrue(summary["album_metadata_completed"])
             self.assertFalse(summary["media_download_requested"])
             self.assertEqual(summary["request_counts"]["original_download_requests"], 0)

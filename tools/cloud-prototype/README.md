@@ -6,9 +6,11 @@ in a fresh temporary directory and retains them for inspection.
 
 ## Run
 
-Python 3.12 or newer; no extra packages:
+Python 3.12 or newer; no extra Python packages. Reconciliation tests also use the
+built archive CLI:
 
 ```sh
+cargo build --locked -p iarchive
 python3 -m unittest discover -s tools/cloud-prototype -v
 python3 tools/cloud-prototype/demo.py
 ```
@@ -66,6 +68,40 @@ not prove native junction behavior.
 ```
 
 Both review bundles contain matching plans/audits outside media.
+
+## Reconcile saved reports
+
+Compare a sanitized resource report, completed download provenance and an
+iarchive **replica** JSONL manifest. An inventory export is insufficient.
+
+```sh
+python3 tools/cloud-prototype/reconcile.py --resource-report resource-report-private.json --download-manifest download-manifest-private.json --replica-manifest manifest.jsonl
+```
+
+This reads only the three reports and prints private JSON to stdout. It never
+opens media, authenticates, makes requests or creates a cloud operation plan.
+Inputs are limited to 16 MiB each and 20,000 records. Keep output private: it
+contains full identities and relative paths.
+
+Paths bind through download provenance. Defaults strip `copy-a/` and `copy-b/`
+before comparison with archive-relative paths. Use `--primary-prefix` and
+`--secondary-prefix` for a different recorded layout. Names, dates and equal
+hashes never supply missing identities or path mappings.
+
+The report checks account/library scope, asset/master/owner tags, every observed
+resource, recorded sizes and response/copy/replica SHA-256 values. Unknown or
+missing variants, ambiguous owners or paths, and unmapped files remain findings.
+Opaque provider checksums are compared as metadata only.
+
+New probe captures record the account binding privately. Older reports produce
+`observation_account_unbound` and need a fresh capture. Zone IDs are compared as
+complete objects, including returned owner fields. Missing owner identity produces
+`observation_zone_owner_unbound`; no owner is inferred from the account.
+
+Exit 0 means recorded observations match, 2 means findings, and 1 means invalid
+input. Even a match leaves fresh local checks, physical independence, cloud
+coverage, content relationships and removal approval unverified. Input digests
+identify the compared bytes; they do not authenticate the reports.
 
 ## What remains unproved
 
