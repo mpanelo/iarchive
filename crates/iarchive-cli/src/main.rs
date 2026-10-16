@@ -1,5 +1,6 @@
 mod operations;
 mod quarantine;
+mod relationships;
 mod replication;
 mod review;
 mod worker;
@@ -39,6 +40,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// List saved archive cycles without scanning their media.
+    Cycles,
+    /// Read local metadata to observe associated file variants; never change media.
+    Relationships {
+        #[arg(long)]
+        cycle: String,
+        #[arg(long)]
+        exiftool: Option<PathBuf>,
+    },
     /// Check local capabilities without downloading or authenticating.
     Doctor {
         #[arg(long)]
@@ -116,6 +126,22 @@ enum Commands {
     Quarantine {
         #[arg(long)]
         cycle: String,
+        #[arg(long)]
+        quarantine_root: Option<PathBuf>,
+        #[arg(long)]
+        confirm: Option<String>,
+        #[arg(long)]
+        resume: Option<String>,
+        #[arg(
+            long,
+            help = "Acknowledge byte-only backups; does not prove physical independence"
+        )]
+        allow_unverified_devices: bool,
+    },
+    /// Restore an immutable quarantine plan to original primary paths without overwriting.
+    Restore {
+        #[arg(long)]
+        quarantine_id: String,
     },
     /// Copy a frozen raw file set without overwriting, then independently verify both roots.
     Replicate(replication::Args),
@@ -184,7 +210,10 @@ fn state_dir(cli: &Cli) -> Result<PathBuf> {
     if matches!(cli.command, Commands::Review { .. }) {
         review::reject_links(&p)?;
     }
-    if matches!(cli.command, Commands::Quarantine { .. }) {
+    if matches!(
+        cli.command,
+        Commands::Quarantine { .. } | Commands::Restore { .. }
+    ) {
         return iarchive_fs::volume::checked_directory(&p);
     }
     absolute_destination(&p)
@@ -204,7 +233,19 @@ fn load_config(state: &Path) -> Result<Option<Config>> {
 }
 
 fn check_root(state: &Path, root: &Path) -> Result<()> {
-    let root = absolute_destination(root)?;
+    ensure!(
+        !root
+            .components()
+            .any(|p| matches!(p, std::path::Component::ParentDir)),
+        "registered media root contains traversal"
+    );
+    // An offline registered volume is still a reserved path. Listing cycles and
+    // restoring primary bytes do not require the secondary volume to be mounted.
+    let root = match absolute_destination(root) {
+        Ok(root) => root,
+        Err(_) if root.is_absolute() => root.to_owned(),
+        Err(error) => return Err(error),
+    };
     ensure!(
         !state.starts_with(&root) && !root.starts_with(state),
         "state and media roots must not overlap"
@@ -280,18 +321,38 @@ fn emit(cli: &Cli, value: &impl Serialize) -> Result<()> {
 }
 
 fn run(cli: &Cli) -> Result<bool> {
-    ensure!(
-        !matches!(cli.command, Commands::Quarantine { .. }) || cli.dry_run,
-        "quarantine execution is unavailable; use --dry-run for a read-only preview"
-    );
+    if let Commands::Quarantine { confirm, .. } = &cli.command {
+        ensure!(
+            cli.dry_run || confirm.is_some(),
+            "quarantine requires --confirm from a read-only --dry-run preview"
+        );
+    }
     let state = state_dir(cli)?;
-    if let Commands::Quarantine { cycle } = &cli.command {
-        validate_cycle(cycle)?;
+    if matches!(
+        cli.command,
+        Commands::Quarantine { .. }
+            | Commands::Restore { .. }
+            | Commands::Relationships { .. }
+            | Commands::Cycles
+    ) {
+        if matches!(cli.command, Commands::Cycles) && !state.join("manifest.sqlite").exists() {
+            emit(cli, &serde_json::json!({"cycles":[]}))?;
+            return Ok(true);
+        }
         check_state_artifacts(&state)?;
         let lock = File::open(state.join("writer.lock"))?;
-        FileExt::try_lock_shared(&lock)
-            .context("another iarchive operation holds this state directory")?;
-        let store = Store::open_checkpointed(&state.join("manifest.sqlite"))?;
+        if cli.dry_run || matches!(cli.command, Commands::Cycles) {
+            FileExt::try_lock_shared(&lock)
+                .context("another iarchive operation holds this state directory")?;
+        } else {
+            FileExt::try_lock_exclusive(&lock)
+                .context("another iarchive operation holds this state directory")?;
+        }
+        let store = if cli.dry_run || matches!(cli.command, Commands::Cycles) {
+            Store::open_checkpointed(&state.join("manifest.sqlite"))?
+        } else {
+            Store::open(&state.join("manifest.sqlite"))?
+        };
         for root in store.roots()? {
             check_root(&state, &root)?;
         }
@@ -301,7 +362,43 @@ fn run(cli: &Cli) -> Result<bool> {
                 check_root(&state, &secondary)?;
             }
         }
-        return quarantine::run(cli, &store, cycle);
+        return match &cli.command {
+            Commands::Quarantine {
+                cycle,
+                quarantine_root,
+                confirm,
+                resume,
+                allow_unverified_devices,
+            } => {
+                validate_cycle(cycle)?;
+                if let Some(id) = resume {
+                    validate_cycle(id)?;
+                }
+                quarantine::run(
+                    cli,
+                    &store,
+                    &state,
+                    cycle,
+                    quarantine_root.as_deref(),
+                    confirm.as_deref(),
+                    resume.as_deref(),
+                    *allow_unverified_devices,
+                )
+            }
+            Commands::Restore { quarantine_id } => {
+                validate_cycle(quarantine_id)?;
+                quarantine::restore(cli, &store, quarantine_id)
+            }
+            Commands::Relationships { cycle, exiftool } => {
+                validate_cycle(cycle)?;
+                relationships::run(cli, &store, cycle, exiftool.as_deref())
+            }
+            Commands::Cycles => {
+                emit(cli, &serde_json::json!({"cycles":store.cycles()?}))?;
+                Ok(true)
+            }
+            _ => unreachable!(),
+        };
     }
     let config = load_config(&state)?;
     preflight(&state, &config)?;
@@ -407,7 +504,6 @@ fn run(cli: &Cli) -> Result<bool> {
         | Commands::ExportManifest { cycle, .. }
         | Commands::Audit { cycle, .. }
         | Commands::Review { cycle, .. }
-        | Commands::Quarantine { cycle }
         | Commands::Report { cycle } => cycle,
         Commands::Replicate(args) | Commands::Verify { args, .. } => &args.cycle,
         _ => unreachable!(),

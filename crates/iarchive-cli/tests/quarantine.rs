@@ -197,13 +197,10 @@ fn preview_preserves_files_and_decisions() {
         &preview["flags"][0]["blockers"],
         "relationships are unknown"
     ));
-    assert_eq!(preview["flags"][0]["blockers"].as_array().unwrap().len(), 1);
     assert_eq!(fixture.snapshot(), before);
     let output = fixture.run(&["quarantine", "--cycle", "x"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("quarantine execution is unavailable")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("quarantine requires --confirm"));
     assert_eq!(fixture.snapshot(), before);
 
     fixture.decide("x", 1, ReviewAction::KeepAll);

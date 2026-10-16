@@ -47,6 +47,8 @@ pub struct ReviewFile {
     pub features: Option<serde_json::Value>,
     pub pair_confidence: &'static str,
     pub preview_available: bool,
+    pub relationship: Option<serde_json::Value>,
+    pub location: String,
     #[serde(skip)]
     pub thumbnail: Option<String>,
     // Bind cross-cycle members to their recorded scans as well.
@@ -95,7 +97,12 @@ impl Store {
         Ok(kept)
     }
 
-    fn review_file(&self, id: i64) -> Result<ReviewFile> {
+    fn review_file(
+        &self,
+        id: i64,
+        relationships: &std::collections::BTreeMap<i64, serde_json::Value>,
+        moved: &std::collections::BTreeMap<i64, String>,
+    ) -> Result<ReviewFile> {
         let (mut file, warnings, features) = self.connection.query_row(
             "SELECT f.cycle_id,f.relative_path,f.kind,f.byte_count,f.mtime_ns,f.sha256,f.present,f.error,a.error,f.warnings_json,a.features_json,c.active_scan FROM file_item f JOIN archive_cycle c ON c.id=f.cycle_id LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.id=?1",
             params![id, ALGORITHM_VERSION],
@@ -104,10 +111,21 @@ impl Store {
                 byte_count: nonnegative_integer(r,3)?, mtime_ns: r.get(4)?, sha256: r.get(5)?,
                 present: r.get(6)?, file_error: r.get(7)?, decode_error: r.get(8)?,
                 warnings: Vec::new(), features: None, thumbnail: None,
-                preview_available: false, pair_confidence: "unknown", scan: r.get(11)?,
+                preview_available: false, pair_confidence: "unknown", scan: r.get(11)?, relationship:None, location:"primary (recorded)".into(),
             }, r.get::<_,String>(9)?, r.get::<_,Option<String>>(10)?)),
         )?;
         file.warnings = serde_json::from_str(&warnings)?;
+        file.relationship = relationships.get(&id).cloned();
+        if file
+            .relationship
+            .as_ref()
+            .is_some_and(|r| r["blockers"].as_array().is_some_and(Vec::is_empty))
+        {
+            file.pair_confidence = "metadata_observed";
+        }
+        if let Some(location) = moved.get(&id) {
+            file.location = location.clone();
+        }
         if file.present && file.file_error.is_none() && file.decode_error.is_none() {
             if let Some(features) = features {
                 let parsed: ImageFeatures = serde_json::from_str(&features)?;
@@ -123,6 +141,44 @@ impl Store {
     /// Saved audit observations only; never opens media or proves current byte equality.
     pub fn review_snapshot(&self, cycle: &str) -> Result<ReviewSnapshot> {
         let status = self.status(cycle)?;
+        let mut cycles:BTreeSet<String>=self.connection.prepare("SELECT DISTINCT f.cycle_id FROM file_item f JOIN candidate_member m ON m.file_id=f.id JOIN candidate_group g ON g.id=m.group_id WHERE g.cycle_id=?1")?
+            .query_map([cycle], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        cycles.insert(cycle.into());
+        let mut relationships = std::collections::BTreeMap::new();
+        let mut local_relationships = vec![];
+        let mut moved = std::collections::BTreeMap::new();
+        for related_cycle in cycles {
+            for group in self.relationships(&related_cycle)? {
+                for member in &group.members {
+                    relationships.insert(member.id,serde_json::json!({"group":group.fingerprint,"role":member.role,
+                        "members":group.members.iter().map(|m|&m.fact.relative_path).collect::<Vec<_>>(),"blockers":group.blockers}));
+                }
+                if related_cycle == cycle {
+                    local_relationships.push(group);
+                }
+            }
+            for job in self.active_jobs(&related_cycle)? {
+                if let Some(files) = job.plan["files"].as_array() {
+                    let paths: BTreeSet<_> = files
+                        .iter()
+                        .filter_map(|f| f["relative_path"].as_str())
+                        .collect();
+                    for (id, f) in self.file_facts(&related_cycle)? {
+                        if paths.contains(f.relative_path.as_str()) {
+                            moved.insert(
+                                id,
+                                if job.state == "QUARANTINED" {
+                                    "quarantine (recorded)"
+                                } else {
+                                    "needs journal reconciliation"
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         let scan: Option<i64> = self.connection.query_row(
             "SELECT active_scan FROM archive_cycle WHERE id=?1",
             [cycle],
@@ -141,7 +197,7 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let members = ids
                 .into_iter()
-                .map(|id| self.review_file(id))
+                .map(|id| self.review_file(id, &relationships, &moved))
                 .collect::<Result<Vec<_>>>()?;
             let mut group = ReviewGroup {
                 fingerprint: String::new(),
@@ -170,12 +226,71 @@ impl Store {
             }
             reviewed.push(group);
         }
+        for related in local_relationships {
+            let live = related
+                .members
+                .iter()
+                .any(|m| m.metadata.content_id.is_some());
+            let video = related
+                .members
+                .iter()
+                .all(|m| m.fact.kind == iarchive_core::FileKind::Video);
+            if !live && !video && related.members.len() < 2 {
+                continue;
+            }
+            let members = related
+                .members
+                .iter()
+                .map(|m| self.review_file(m.id, &relationships, &moved))
+                .collect::<Result<Vec<_>>>()?;
+            let mut group = ReviewGroup {
+                fingerprint: String::new(),
+                kind: if live {
+                    "live_photo"
+                } else if video {
+                    "video"
+                } else {
+                    "variants"
+                }
+                .into(),
+                explanation: if related.blockers.is_empty() {
+                    "Metadata identifies these local components. Flagging an image proposes the whole group; quarantine still requires a separately confirmed, freshly verified plan.".into()
+                } else {
+                    related.blockers.join("; ")
+                },
+                algorithm_version: iarchive_core::relationships::VERSION.into(),
+                members,
+                decision: None,
+            };
+            group.fingerprint = format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&(
+                    cycle,
+                    scan,
+                    &related.fingerprint,
+                    &group
+                ))?)
+            );
+            let decision:Option<(String,String)>=self.connection.query_row("SELECT decision_json,recorded_at FROM review_decision WHERE cycle_id=?1 AND fingerprint=?2 ORDER BY id DESC LIMIT 1",
+                params![cycle,group.fingerprint],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            if let Some((json, recorded_at)) = decision {
+                let input: ReviewInput = serde_json::from_str(&json)?;
+                if input.action != ReviewAction::Reset {
+                    group.decision = Some(ReviewDecision {
+                        action: input.action,
+                        selected: input.selected,
+                        recorded_at,
+                    });
+                }
+            }
+            reviewed.push(group);
+        }
         let ids = self.connection.prepare(
             "SELECT f.id FROM file_item f LEFT JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id=?1 AND (f.error IS NOT NULL OR f.present=0 OR a.error IS NOT NULL OR f.kind NOT IN ('image','sidecar') OR (f.kind='image' AND a.features_json IS NULL)) ORDER BY f.relative_path",
         )?.query_map(params![cycle,ALGORITHM_VERSION], |r| r.get::<_,i64>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
         let findings = ids
             .into_iter()
-            .map(|id| self.review_file(id))
+            .map(|id| self.review_file(id, &relationships, &moved))
             .collect::<Result<Vec<_>>>()?;
         let scan_issues = self
             .connection
@@ -195,7 +310,7 @@ impl Store {
             findings,
             scan_issues,
             decision_history_count,
-            note: "Saved audit snapshot; no current media verification. Decisions are review notes only and never move files or authorize removal. Associated-file relationships remain unknown.",
+            note: "Saved audit snapshot; no current media verification. Decisions are review notes only. Local relationship labels are metadata observations, not cloud coverage or move approval.",
         })
     }
 

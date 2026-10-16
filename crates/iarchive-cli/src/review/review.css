@@ -17,7 +17,7 @@ body {
   background:var(--paper);
   color:var(--ink);
 }
-button,input {
+button,input,select {
   font:inherit;
 }
 button {
@@ -27,7 +27,7 @@ button:disabled {
   cursor:default;
   opacity:.45;
 }
-button:focus-visible,a:focus-visible,input:focus-visible {
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible {
   outline:3px solid #548e70;
   outline-offset:3px;
 }
@@ -118,6 +118,21 @@ p {
   color:var(--muted);
   margin:4px 0;
   font-size:13px;
+}
+.cycle-picker {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:.75rem;
+  margin:1rem 0;
+}
+.cycle-picker select {
+  max-width:100%;
+  padding:.5rem;
+  border:1px solid var(--line);
+  border-radius:.4rem;
+  background:var(--white);
+  color:var(--ink);
 }
 .summary-notes {
   max-width:420px;

@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{DefaultBodyLimit, Path as RoutePath, Request, State},
-    http::{StatusCode, header},
+    http::{StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -36,13 +36,18 @@ type ApiError = (StatusCode, &'static str);
 pub fn run(cli: &Cli, store: Store, state: &Path, cycle: &str, port: u16) -> Result<bool> {
     reject_links(cli.state_dir.as_deref().unwrap_or(state))?;
     let snapshot = store.review_snapshot(cycle)?;
-    let previews = snapshot
-        .groups
-        .iter()
-        .flat_map(|g| &g.members)
-        .chain(&snapshot.findings)
-        .filter_map(|f| f.thumbnail.as_ref().map(|p| (f.id, p.clone())))
-        .collect();
+    let mut previews = BTreeMap::new();
+    for cycle in store.cycles()? {
+        let view = store.review_snapshot(&cycle.cycle)?;
+        previews.extend(
+            view.groups
+                .iter()
+                .flat_map(|g| &g.members)
+                .chain(&view.findings)
+                .filter_map(|f| f.thumbnail.as_ref().map(|p| (f.id, p.clone()))),
+        );
+    }
+    let _ = snapshot;
     tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
         // No configurable host: review content can only be served on IPv4 loopback.
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
@@ -97,6 +102,7 @@ fn router(state: Shared) -> Router {
             }),
         )
         .route("/api/review", get(snapshot))
+        .route("/api/cycles", get(cycles))
         .route("/api/decision", post(decide))
         .route("/api/preview/{id}", get(preview))
         .layer(DefaultBodyLimit::max(16 * 1024))
@@ -150,14 +156,28 @@ async fn guard(State(state): State<Shared>, request: Request, next: Next) -> Res
     response
 }
 
-fn load_snapshot(state: &AppState) -> Result<ReviewSnapshot, ApiError> {
+fn selected_cycle<'a>(state: &'a AppState, uri: &'a axum::http::Uri) -> Result<&'a str, ApiError> {
+    let cycle = if let Some(query) = uri.query() {
+        query
+            .strip_prefix("cycle=")
+            .filter(|value| !value.contains('&'))
+            .ok_or((StatusCode::BAD_REQUEST, "Invalid cycle query."))?
+    } else {
+        &state.cycle
+    };
+    iarchive_core::validate_cycle(cycle)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid archive cycle."))?;
+    Ok(cycle)
+}
+
+fn load_snapshot_cycle(state: &AppState, cycle: &str) -> Result<ReviewSnapshot, ApiError> {
     let store = state.store.lock().map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Review state is unavailable.",
         )
     })?;
-    let mut snapshot = store.review_snapshot(&state.cycle).map_err(|_| {
+    let mut snapshot = store.review_snapshot(cycle).map_err(|_| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Cannot read the saved audit.",
@@ -177,12 +197,28 @@ fn load_snapshot(state: &AppState) -> Result<ReviewSnapshot, ApiError> {
     Ok(snapshot)
 }
 
-async fn snapshot(State(state): State<Shared>) -> Result<Json<ReviewSnapshot>, ApiError> {
-    Ok(Json(load_snapshot(&state)?))
+async fn snapshot(State(state): State<Shared>, uri: Uri) -> Result<Json<ReviewSnapshot>, ApiError> {
+    Ok(Json(load_snapshot_cycle(
+        &state,
+        selected_cycle(&state, &uri)?,
+    )?))
+}
+
+async fn cycles(State(state): State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    let store = state.store.lock().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Review state unavailable.",
+        )
+    })?;
+    Ok(Json(
+        serde_json::json!({"cycles":store.cycles().map_err(|_|(StatusCode::INTERNAL_SERVER_ERROR,"Cannot read cycles."))?}),
+    ))
 }
 
 async fn decide(
     State(state): State<Shared>,
+    uri: Uri,
     Json(input): Json<ReviewInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut store = state.store.lock().map_err(|_| {
@@ -191,12 +227,14 @@ async fn decide(
             "Review state is unavailable.",
         )
     })?;
-    store.record_review(&state.cycle, &input).map_err(|_| {
-        (
-            StatusCode::CONFLICT,
-            "Decision rejected. Reload the gallery and check the selection.",
-        )
-    })?;
+    store
+        .record_review(selected_cycle(&state, &uri)?, &input)
+        .map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                "Decision rejected. Reload the gallery and check the selection.",
+            )
+        })?;
     Ok(Json(
         serde_json::json!({"saved":true,"media_changed":false}),
     ))
@@ -204,8 +242,19 @@ async fn decide(
 
 async fn preview(
     State(state): State<Shared>,
+    uri: Uri,
     RoutePath(id): RoutePath<i64>,
 ) -> Result<Response, ApiError> {
+    let view = load_snapshot_cycle(&state, selected_cycle(&state, &uri)?)?;
+    if !view
+        .groups
+        .iter()
+        .flat_map(|g| &g.members)
+        .chain(&view.findings)
+        .any(|f| f.id == id)
+    {
+        return Err((StatusCode::NOT_FOUND, "No preview in the selected cycle."));
+    }
     let bytes = state
         .previews
         .get(&id)
@@ -553,6 +602,71 @@ mod tests {
                 .decision_history_count,
             0
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cycle_selection_binds_review_requests() {
+        let fixture = Fixture::new();
+        {
+            let mut store = fixture.state.store.lock().unwrap();
+            store
+                .import("next", &fixture.dir.path().join("other-media"))
+                .unwrap();
+        }
+        let data = json(fixture.request(Method::GET, "/api/cycles", "").await).await;
+        assert_eq!(data["cycles"].as_array().unwrap().len(), 2);
+        let next = json(
+            fixture
+                .request(Method::GET, "/api/review?cycle=next", "")
+                .await,
+        )
+        .await;
+        assert_eq!(next["status"]["cycle"], "next");
+        assert!(next["groups"].as_array().unwrap().is_empty());
+        let view = json(
+            fixture
+                .request(Method::GET, "/api/review?cycle=x", "")
+                .await,
+        )
+        .await;
+        let input=serde_json::json!({"fingerprint":view["groups"][0]["fingerprint"],"action":"keep_all","selected":[]}).to_string();
+        assert_eq!(
+            fixture
+                .request(Method::POST, "/api/decision?cycle=next", &input)
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            fixture
+                .request(Method::GET, "/api/preview/1?cycle=next", "")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        for query in ["cycle=../x", "cycle=x&cycle=next", "cycle=%2ex"] {
+            assert_eq!(
+                fixture
+                    .request(Method::GET, &format!("/api/review?{query}"), "")
+                    .await
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        assert_eq!(
+            fixture
+                .request(Method::POST, "/api/decision?cycle=x", &input)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let view = json(
+            fixture
+                .request(Method::GET, "/api/review?cycle=x", "")
+                .await,
+        )
+        .await;
+        assert_eq!(view["groups"][0]["decision"]["action"], "keep_all");
     }
 
     #[tokio::test(flavor = "current_thread")]

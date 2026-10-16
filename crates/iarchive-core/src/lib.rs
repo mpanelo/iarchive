@@ -2,6 +2,7 @@ use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
+pub mod relationships;
 pub mod similarity;
 
 pub const SCHEMA_VERSION: u32 = 1;

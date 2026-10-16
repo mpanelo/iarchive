@@ -4,7 +4,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+mod local_actions;
 mod review;
+pub use local_actions::LocalJob;
 pub use review::{
     ReviewAction, ReviewDecision, ReviewFile, ReviewGroup, ReviewInput, ReviewSnapshot,
 };
@@ -14,7 +16,7 @@ pub struct Store {
 }
 pub type ExactMember = (i64, String, String);
 pub type ExactGroup = Vec<ExactMember>;
-const STORE_SCHEMA_VERSION: u32 = 3;
+const STORE_SCHEMA_VERSION: u32 = 4;
 
 fn nonnegative_integer(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(column)?;
@@ -41,6 +43,7 @@ pub struct CycleStatus {
     pub last_replica_run: Option<i64>,
     pub cloud_coverage: &'static str,
     pub cloud_asset_count: Option<u64>,
+    pub quarantine_jobs: Vec<serde_json::Value>,
     pub status_note: &'static str,
 }
 
@@ -131,6 +134,12 @@ impl Store {
         if version < 3 {
             let tx = connection.transaction()?;
             tx.execute_batch(include_str!("review.sql"))?;
+            tx.pragma_update(None, "user_version", 3)?;
+            tx.commit()?;
+        }
+        if version < 4 {
+            let tx = connection.transaction()?;
+            tx.execute_batch(include_str!("local_actions.sql"))?;
             tx.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
             tx.commit()?;
         }
@@ -154,10 +163,19 @@ impl Store {
                     .collect::<rusqlite::Result<Vec<_>>>()?,
             );
         }
+        if version >= 4 {
+            roots.extend(
+                self.connection
+                    .prepare("SELECT DISTINCT quarantine_root FROM quarantine_job")?
+                    .query_map([], |row| Ok(PathBuf::from(row.get::<_, String>(0)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+        }
         Ok(roots)
     }
 
     pub fn import(&mut self, cycle: &str, root: &Path) -> Result<()> {
+        let registered = self.roots()?;
         let root = root
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("source root is not Unicode"))?;
@@ -175,6 +193,12 @@ impl Store {
                 "cycle already belongs to another source; choose a new cycle ID"
             );
         } else {
+            for other in registered {
+                ensure!(
+                    !Path::new(root).starts_with(&other) && !Path::new(&other).starts_with(root),
+                    "archive cycles must use separate, non-overlapping media directories"
+                );
+            }
             tx.execute(
                 "INSERT INTO archive_cycle(id,source_root) VALUES(?1,?2)",
                 params![cycle, root],
@@ -219,16 +243,39 @@ impl Store {
         visitor: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     ) -> Result<()> {
         let root = self.root(cycle)?;
+        let relationships = self.relationships(cycle)?;
+        let related: std::collections::BTreeMap<_, _> = relationships
+            .iter()
+            .flat_map(|g| g.members.iter().map(move |m| (m.id, (g, m))))
+            .collect();
+        let mut moved = std::collections::BTreeMap::new();
+        for job in self.active_jobs(cycle)? {
+            if let Some(files) = job.plan["files"].as_array() {
+                for file in files {
+                    if let Some(path) = file["relative_path"].as_str() {
+                        moved.insert(
+                            path.to_owned(),
+                            serde_json::json!({"quarantine_id":job.id,"state":job.state,
+                            "quarantine_media":job.plan["quarantine"]}),
+                        );
+                    }
+                }
+            }
+        }
         let mut stmt = self.connection.prepare("SELECT id,relative_path,kind,byte_count,mtime_ns,sha256,error,warnings_json,present FROM file_item WHERE cycle_id=?1 ORDER BY relative_path")?;
         let mut rows = stmt.query([cycle])?;
         while let Some(row) = rows.next()? {
+            let id = row.get::<_, i64>(0)?;
+            let path = row.get::<_, String>(1)?;
+            let relationship=related.get(&id).map(|(g,m)|serde_json::json!({"group":g.fingerprint,"role":m.role,"blockers":g.blockers}));
             visitor(serde_json::json!({
                 "schema_version":SCHEMA_VERSION,"record_type":"file","archive_id":cycle,
-                "file_id":row.get::<_,i64>(0)?,"relative_path":row.get::<_,String>(1)?,
+                "file_id":id,"relative_path":path,
                 "role":row.get::<_,String>(2)?,"byte_count":nonnegative_integer(row,3)?,
                 "mtime_ns":row.get::<_,String>(4)?,"sha256":row.get::<_,Option<String>>(5)?,
                 "error":row.get::<_,Option<String>>(6)?,"warnings":serde_json::from_str::<serde_json::Value>(&row.get::<_,String>(7)?)?,
-                "present":row.get::<_,bool>(8)?,"cloud_asset_id":null,"pair_confidence":"unknown",
+                "present":row.get::<_,bool>(8)?,"cloud_asset_id":null,"pair_confidence":if related.get(&id).is_some_and(|(g,_)|g.blockers.is_empty()) {"metadata_observed"} else {"unknown"},
+                "relationship":relationship,"local_action":moved.get(&path),
                 "source_root_hint":root,"local_replica":"NOT VERIFIED","cloud_coverage":"NOT VERIFIED"
             }))?;
         }
@@ -312,11 +359,20 @@ impl Store {
             last_replica_run: last.map(|(id, _)| id),
             cloud_coverage: "NOT VERIFIED",
             cloud_asset_count: None,
+            quarantine_jobs: self
+                .active_jobs(cycle)?
+                .into_iter()
+                .map(|job| serde_json::json!({"id":job.id,"state":job.state,"error":job.error}))
+                .collect(),
             status_note: "Last recorded scan only; status does not rehash or prove current filesystem contents. Files are not iCloud assets.",
         })
     }
 
     pub fn begin_scan(&mut self, cycle: &str) -> Result<i64> {
+        ensure!(
+            self.active_jobs(cycle)?.is_empty(),
+            "restore quarantined files before indexing or auditing this cycle"
+        );
         let tx = self.connection.transaction()?;
         tx.execute(
             "UPDATE replica_run SET state='STALE' WHERE cycle_id=?1 AND state='VERIFIED'",
@@ -614,16 +670,21 @@ mod tests {
 
     #[test]
     fn legacy_state_migrates_without_losing_inventory() {
-        for version in [1, 2] {
+        for version in [1, 2, 3] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("db.sqlite");
             let connection = Connection::open(&path).unwrap();
             connection
                 .execute_batch(include_str!("schema.sql"))
                 .unwrap();
-            if version == 2 {
+            if version >= 2 {
                 connection
                     .execute_batch(include_str!("replica.sql"))
+                    .unwrap();
+            }
+            if version >= 3 {
+                connection
+                    .execute_batch(include_str!("review.sql"))
                     .unwrap();
             }
             connection
@@ -781,10 +842,34 @@ mod tests {
         store.save_file("x", resumed, &fact).unwrap();
         store.finish_scan("x", resumed, true).unwrap();
         assert!(store.status("x").unwrap().inventory_complete);
+        let metadata = iarchive_core::relationships::Metadata {
+            image_id: Some("synthetic-image".into()),
+            ..Default::default()
+        };
+        let hash = fact.sha256.as_deref().unwrap();
+        store
+            .save_metadata(1, hash, "unrecognized-extractor", &metadata)
+            .unwrap();
+        assert!(store.metadata(1, hash).unwrap().is_none());
+        store
+            .save_metadata(
+                1,
+                hash,
+                iarchive_core::relationships::EXTRACTOR_VERSION,
+                &metadata,
+            )
+            .unwrap();
+        assert_eq!(store.metadata(1, hash).unwrap(), Some(metadata));
         store.connection.execute("INSERT INTO analysis(file_id,sha256,algorithm_version,error) VALUES(1,?1,'v1','decode error')",[fact.sha256.as_deref().unwrap()]).unwrap();
         fact.sha256 = Some("b".repeat(64));
         let new_scan = store.begin_scan("x").unwrap();
         store.save_file("x", new_scan, &fact).unwrap();
+        assert!(
+            store
+                .metadata(1, fact.sha256.as_deref().unwrap())
+                .unwrap()
+                .is_none()
+        );
         let count: i64 = store
             .connection
             .query_row("SELECT COUNT(*) FROM analysis", [], |r| r.get(0))

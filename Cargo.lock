@@ -504,6 +504,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
  "unicode-normalization",
 ]
@@ -515,7 +517,9 @@ dependencies = [
  "anyhow",
  "fs2",
  "iarchive-core",
+ "libc",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "walkdir",

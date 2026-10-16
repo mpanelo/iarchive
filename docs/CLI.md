@@ -25,7 +25,10 @@ Run from the checkout. Use one state directory and cycle for each workflow.
 | `export-manifest` | `--cycle ID --output PATH` |
 | `replicate` | `--cycle ID --primary-artifacts PATH --secondary-artifacts PATH`, optional `--secondary PATH` |
 | `review` | `--cycle ID`, optional `--port NUMBER` |
-| `quarantine` | `--dry-run --cycle ID`; read-only preview of saved flags and blockers |
+| `relationships` | `--cycle ID`, optional `--exiftool PATH`; read-only on media |
+| `quarantine` | `--cycle ID`, preview with `--dry-run`, execute with `--confirm DIGEST`; optional `--quarantine-root PATH` |
+| `restore` | `--quarantine-id ID`, optional `--dry-run` |
+| `cycles` | List saved cycles without scanning media |
 | `verify` | The replica options above, plus required `--deep` |
 | `status` | `--cycle ID` |
 
@@ -58,10 +61,17 @@ After stopping review, preview saved flags:
 iarchive --dry-run quarantine --cycle ID
 ```
 
-It rehashes both roots from the saved replica binding. Keep decisions,
-changed or unverified copies, and unknown file relationships block quarantine.
-Relationships are currently unknown, so flags remain blocked. No files move;
-quarantine execution and restore are unavailable.
+The preview rehashes the raw backup and all primary bytes. Keep decisions,
+changed copies, and unknown or ambiguous relationships block moves. Check every
+listed file before using its confirmation digest. Related components move
+together to a journaled directory on the primary volume; the raw secondary stays
+unchanged. Restore never overwrites an existing file.
+
+Use `--resume ID --confirm DIGEST` to finish an interrupted quarantine, or restore
+its ID to return the files. Stop the gallery first. While a job is active,
+`verify --deep` accounts for quarantined files; index, audit and replicate require
+restoration. `--allow-unverified-devices` acknowledges byte-only copies and keeps
+physical independence **NOT VERIFIED**.
 
 ## State and worker locations
 

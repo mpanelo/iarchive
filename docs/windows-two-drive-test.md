@@ -64,11 +64,23 @@ If the copy finishes too quickly, retry with a larger file:
 Sizes from 64–2048 MiB are supported. Retries use fresh folders; step 3 need not
 be repeated. Both drive scripts must pass.
 
-## 5. Keep the results
+## 5. Review, quarantine and restore
+
+```powershell
+.\scripts\windows\test-review-two-drives.ps1 -PrimaryDrive 'D:' -SecondaryDrive 'E:'
+```
+
+This uses five generated files. It proves their metadata groups, flags two images,
+quarantines four associated files, verifies both copies, then restores the
+original paths, hashes and timestamps. The secondary media must stay unchanged.
+Wait for `PASS`.
+
+## 6. Keep the results
 
 Keep all printed summaries, their `reports` folders and both drive-run folders.
 Require `passed: true` in both drive summaries and `interruption.status: PASSED`
-in the interruption summary. No cleanup is required.
+in the interruption summary. Require `passed: true` in the review summary too.
+No cleanup is required.
 
 Passing these checks proves the tested synthetic behavior, not complete iCloud
 coverage or permission to delete media. Do not unplug drives holding archives.

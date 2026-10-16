@@ -12,7 +12,7 @@ The executable is `iarchive`. Read local planning instructions before changing s
 ## Safety invariants
 
 - Inventory and image review are read-only on media. Never read private archives during development; use synthetic fixtures and temporary directories.
-- No cloud authentication, deletion, local purge, quarantine, or telemetry in the archive CLI. Individually approved cloud research remains separate. Do not invoke destructive icloudpd flags.
+- No cloud authentication, deletion, local purge, or telemetry in the archive CLI. Quarantine requires an explicitly confirmed plan, proven local relationships, fresh raw-backup verification, and a durable reversible journal. Never overwrite a restore destination or alter secondary media. Individually approved cloud research remains separate. Do not invoke destructive icloudpd flags.
 - Unknown, unreadable, partial, missing, or undecodable files are explicit findings, never deletion candidates. Preserve every file variant as a separate inventory entry. Pair confidence remains unknown until metadata proves a relationship.
 - A single-root inventory does not prove replication. Deep replica checks report local byte equality separately from physical-drive independence, completed iPhone upload, and cloud coverage. Unknown guarantees remain NOT VERIFIED.
 - State, manifests, and thumbnails stay outside archive roots. Never follow symlinks or Windows reparse points. Reject path traversal and unsafe output destinations.
@@ -69,6 +69,10 @@ Document the commit message convention
 Use rustfmt's standard Rust 2024 style and the Rust API Guidelines for public APIs. Run Clippy with warnings treated as errors; enable stricter lints selectively rather than enabling entire pedantic or restriction groups. See [development tooling](docs/development.md) for setup and editor integration.
 
 Use workspace-local caches when sandboxed:
+
+Metadata integration tests also require the pinned project-local ExifTool. Set it
+up with `uv run --locked --project image-worker python scripts/setup_metadata.py`;
+do not skip those tests when it is missing.
 
 ```sh
 export CARGO_HOME="$PWD/.cargo-home"

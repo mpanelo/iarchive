@@ -109,32 +109,70 @@ pub fn run(
         previous: previous.as_ref(),
     };
     let operation = if copy { "replicate" } else { "verify" };
+    let active = store.active_jobs(&args.cycle)?;
+    ensure!(
+        !copy || active.is_empty(),
+        "restore quarantined files before starting another replication"
+    );
     let run = if cli.dry_run {
         None
     } else {
         Some(store.begin_replica(&args.cycle, operation)?)
     };
     let mut bound = false;
-    let mut summary = replica::execute(&options, &mut |progress| {
-        if let Some(run) = run {
-            if !bound {
-                store.bind_replica(
-                    &args.cycle,
-                    &secondary,
-                    &serde_json::to_string(progress.binding)?,
+    let mut summary = if active.is_empty() {
+        replica::execute(&options, &mut |progress| {
+            if let Some(run) = run {
+                if !bound {
+                    store.bind_replica(
+                        &args.cycle,
+                        &secondary,
+                        &serde_json::to_string(progress.binding)?,
+                    )?;
+                    bound = true;
+                }
+                store.replica_progress(
+                    run,
+                    progress.file,
+                    progress.state,
+                    progress.copied_bytes,
+                    progress.partial,
                 )?;
-                bound = true;
             }
-            store.replica_progress(
-                run,
-                progress.file,
-                progress.state,
-                progress.copied_bytes,
-                progress.partial,
-            )?;
+            Ok(())
+        })
+    } else {
+        replica::validate_roots(&options)?;
+        let binding = previous
+            .as_ref()
+            .context("quarantined archive has no frozen backup")?;
+        ensure!(
+            binding.secondary_root == secondary,
+            "verify must use the bound secondary root"
+        );
+        ensure!(
+            volume::identity(&primary_artifacts)?.volume_id == binding.source.volume_id
+                && volume::identity(&secondary_artifacts)?.volume_id == binding.secondary.volume_id,
+            "artifacts must stay on their respective media volumes"
+        );
+        let mut summary = replica::verify_relocated(
+            &source,
+            binding,
+            &crate::quarantine::relocations(store, &args.cycle)?,
+        );
+        if !args.allow_unverified_devices
+            && summary.independent_physical_drives != "VERIFIED BY OS TOPOLOGY"
+        {
+            summary.complete = false;
+            summary.local_replica = "NOT VERIFIED";
+            summary
+                .issues
+                .push("Independent physical backups are NOT VERIFIED".into());
         }
-        Ok(())
-    });
+        summary.dry_run = cli.dry_run;
+        summary.binding = Some(binding.clone());
+        summary
+    };
     let mut report = report_value(&summary, &args.cycle, operation, run, &source, &secondary)?;
     if let Some(run) = run {
         let mut bundle = None;
@@ -260,6 +298,16 @@ fn publish(
         volume::checked_directory(bundle)?;
     }
     let manifest = state_bundle.join("manifest.jsonl");
+    let mut local_records = std::collections::BTreeMap::new();
+    store.visit_manifest(
+        report["cycle"].as_str().context("cycle missing")?,
+        &mut |record| {
+            if let Some(path) = record["relative_path"].as_str() {
+                local_records.insert(path.to_owned(), record);
+            }
+            Ok(())
+        },
+    )?;
     let mut file = File::create_new(&manifest)?;
     serde_json::to_writer(
         &mut file,
@@ -276,7 +324,9 @@ fn publish(
             &json!({"schema_version":1,"record_type":"file","archive_id":report["cycle"],
             "relative_path":fact.relative_path,"role":fact.kind,"byte_count":fact.byte_count,
             "source_mtime_ns":fact.mtime_ns,"source_sha256":fact.sha256,"secondary_sha256":fact.sha256,
-            "local_replica":"LOCAL BYTES VERIFIED","cloud_asset_id":null,"pair_confidence":"unknown",
+            "local_replica":"LOCAL BYTES VERIFIED","cloud_asset_id":null,"pair_confidence":local_records.get(&fact.relative_path).map(|r|&r["pair_confidence"]),
+            "relationship":local_records.get(&fact.relative_path).map(|r|&r["relationship"]),
+            "local_action":local_records.get(&fact.relative_path).map(|r|&r["local_action"]),
             "cloud_coverage":"NOT VERIFIED","warnings":fact.warnings}),
         )?;
         file.write_all(b"\n")?;

@@ -14,6 +14,7 @@ class SchemaTests(unittest.TestCase):
         self.db.executescript((ROOT / "crates/iarchive-store/src/schema.sql").read_text())
         self.db.executescript((ROOT / "crates/iarchive-store/src/replica.sql").read_text())
         self.db.executescript((ROOT / "crates/iarchive-store/src/review.sql").read_text())
+        self.db.executescript((ROOT / "crates/iarchive-store/src/local_actions.sql").read_text())
 
     def tearDown(self):
         self.db.close()

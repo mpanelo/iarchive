@@ -159,6 +159,29 @@ fn same_contents(a: &FileFact, b: &FileFact) -> bool {
 /// Read and independently hash both media roots without progress or artifact writes.
 /// This observes the frozen replica; it does not authorize a later operation.
 pub fn verify_frozen(source: &Path, binding: &Binding) -> Summary {
+    verify_relocated(source, binding, &[])
+}
+
+/// Primary files may reside in journal-bound quarantine directories on the same volume.
+pub struct Relocation {
+    pub root: PathBuf,
+    pub identity: VolumeIdentity,
+    pub paths: std::collections::BTreeSet<String>,
+}
+
+pub fn fresh_inventory(root: &Path) -> Result<Vec<FileFact>> {
+    volume::checked_directory(root)?;
+    let mut issues = vec![];
+    let files = inventory(root, &mut issues)?;
+    ensure!(
+        issues.is_empty(),
+        "inventory findings: {}",
+        issues.join("; ")
+    );
+    Ok(files)
+}
+
+pub fn verify_relocated(source: &Path, binding: &Binding, relocations: &[Relocation]) -> Summary {
     let mut report = Summary::new(true);
     let result = (|| -> Result<()> {
         let source =
@@ -175,6 +198,21 @@ pub fn verify_frozen(source: &Path, binding: &Binding) -> Summary {
                     && volume::identity(&secondary)? == binding.secondary,
                 "source or bound secondary root/volume changed or disconnected"
             );
+            for location in relocations {
+                let root = volume::checked_directory(&location.root)?;
+                ensure!(
+                    !root.starts_with(&source)
+                        && !source.starts_with(&root)
+                        && !root.starts_with(&secondary)
+                        && !secondary.starts_with(&root),
+                    "quarantine media roots overlap raw media"
+                );
+                ensure!(
+                    volume::identity(&root)? == location.identity
+                        && location.identity.volume_id == binding.source.volume_id,
+                    "quarantine root/volume identity changed"
+                );
+            }
             Ok(())
         };
         check_identity()?;
@@ -185,7 +223,26 @@ pub fn verify_frozen(source: &Path, binding: &Binding) -> Summary {
             !binding.files.is_empty(),
             "frozen archive contains no files"
         );
-        let current = inventory(&source, &mut report.issues)?;
+        let mut current = inventory(&source, &mut report.issues)?;
+        let mut current_paths: std::collections::BTreeSet<_> =
+            current.iter().map(|f| f.relative_path.clone()).collect();
+        for location in relocations {
+            for file in inventory(&location.root, &mut report.issues)? {
+                if !location.paths.contains(&file.relative_path) {
+                    report.issues.push(format!(
+                        "Unexpected quarantined entry: {}",
+                        file.relative_path
+                    ));
+                }
+                if !current_paths.insert(file.relative_path.clone()) {
+                    report.issues.push(format!(
+                        "Both primary and quarantine contain: {}",
+                        file.relative_path
+                    ));
+                }
+                current.push(file);
+            }
+        }
         let copies = inventory(&secondary, &mut report.issues)?;
         report.planned_files = binding.files.len() as u64;
         report.file_errors = current

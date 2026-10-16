@@ -15,6 +15,7 @@ export UV_CACHE_DIR="$PWD/.uv-cache"
 rustup component add rustfmt clippy
 cargo install --locked cargo-deny --version 0.20.2
 uv sync --locked --project image-worker --group dev
+uv run --locked --project image-worker python scripts/setup_metadata.py
 ```
 
 Add `$CARGO_HOME/bin` to PATH if cargo-deny is not found.

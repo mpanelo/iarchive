@@ -5,11 +5,12 @@ window.addEventListener('hashchange', () => location.reload());
 const message = document.getElementById('message');
 let audit, category = 'all', page = 0, busy = false;
 let savingFingerprint;
+let currentCycle;
 const cards = new Map();
 const selections = new Map();
 const feedback = new Map();
 const perPage = 12;
-const labels = { all: 'All candidates', exact: 'Exact duplicates', similar: 'Similar images', dark: 'Dark candidates', findings: 'Failures & unprocessed', reviewed: 'Reviewed' };
+const labels = { all: 'All candidates', exact: 'Exact duplicates', similar: 'Similar images', dark: 'Dark candidates', live_photo: 'Live Photos', variants: 'Originals & edits', video: 'Videos', findings: 'Failures & unprocessed', reviewed: 'Reviewed' };
 const decisions = { keep_all: 'Group kept', flag_selected: 'Flags saved', defer: 'Group deferred' };
 
 function element(tag, className, text) {
@@ -23,6 +24,7 @@ function notice(text, error = false) {
   message.classList.toggle('error', error);
 }
 async function request(path, options = {}) {
+  if (currentCycle && path.startsWith('/api/') && path !== '/api/cycles') path += `?cycle=${encodeURIComponent(currentCycle)}`;
   const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${token}`, ...options.headers }, cache: 'no-store' });
   if (response.status === 413) throw new Error('That selection is too large to save at once. Select fewer files.');
   if (!response.ok) throw new Error(response.status === 409 ? 'The decision could not be saved. Reload the gallery and check your selection.' : `Request failed (${response.status}). Check that this review session is still running.`);
@@ -30,11 +32,13 @@ async function request(path, options = {}) {
 }
 async function load(renderGallery = true) {
   audit = await (await request('/api/review')).json();
+  currentCycle = audit.status.cycle;
   const current = new Set(audit.groups.map(group => group.fingerprint));
   for (const cache of [selections, feedback]) {
     for (const fingerprint of cache.keys()) if (!current.has(fingerprint)) cache.delete(fingerprint);
   }
   document.getElementById('cycle').textContent = audit.status.cycle;
+  document.getElementById('cycle-select').value = currentCycle;
   document.getElementById('audit-status').textContent = `${audit.status.file_count} recorded files · ${audit.groups.length} candidate groups · ${audit.status.stage.replaceAll('_', ' ').toLowerCase()}`;
   document.getElementById('history').textContent = `${audit.decision_history_count} saved decision ${audit.decision_history_count === 1 ? 'entry' : 'entries'}. Earlier scans remain history.`;
   document.getElementById('workspace').hidden = false;
@@ -149,7 +153,7 @@ function groupCard(group) {
       card.setAttribute('aria-busy', String(pending));
       for (const button of card.querySelectorAll('button')) button.disabled = pending;
       for (const checkbox of card.querySelectorAll('input')) {
-        checkbox.disabled = pending;
+        checkbox.disabled = pending || checkbox.dataset.unavailable === 'true';
         checkbox.checked = selected.has(Number(checkbox.dataset.fileId));
       }
       updateSelection();
@@ -169,6 +173,11 @@ function fileCard(file, selected, selectionChanged, signal, blobs) {
   const info = element('div', 'file-info');
   info.append(element('p', 'file-path', file.relative_path));
   info.append(element('p', '', `${file.cycle} · ${file.kind} · ${new Intl.NumberFormat().format(file.byte_count)} bytes`));
+  if (file.relationship) {
+    info.append(element('p', '', `${file.relationship.role} · ${file.location}`));
+    if (file.relationship.members.length > 1) info.append(element('p', '', `Related files: ${file.relationship.members.join(', ')}`));
+    for (const problem of file.relationship.blockers) info.append(element('p', 'problem', problem));
+  }
   if (file.features) {
     const f = file.features;
     info.append(element('p', '', `${f.width} × ${f.height} · brightness median ${f.p50.toFixed(1)} · dark score ${f.dark_candidate_score.toFixed(2)}`));
@@ -180,6 +189,8 @@ function fileCard(file, selected, selectionChanged, signal, blobs) {
     const label = element('label');
     const checkbox = element('input');
     checkbox.type = 'checkbox';
+    checkbox.dataset.unavailable = String(file.kind !== 'image' || !file.features || !!file.file_error || !!file.decode_error);
+    checkbox.disabled = checkbox.dataset.unavailable === 'true';
     checkbox.dataset.fileId = file.id;
     checkbox.checked = selected.has(file.id);
     checkbox.addEventListener('change', () => {
@@ -213,6 +224,7 @@ async function save(group, action, selected, card) {
   if (busy) { notice('A decision is saving. Please try again in a moment.'); return; }
   if (action === 'flag_selected' && !selected.size) return;
   busy = true;
+  document.getElementById('cycle-select').disabled = true;
   savingFingerprint = group.fingerprint;
   const startedCategory = category, startedPage = page;
   cards.get(group.fingerprint)?.update(group);
@@ -240,6 +252,7 @@ async function save(group, action, selected, card) {
   }
   feedback.set(group.fingerprint, result);
   busy = false;
+  document.getElementById('cycle-select').disabled = false;
   savingFingerprint = undefined;
   render();
   const updated = document.querySelector(`[data-fingerprint="${group.fingerprint}"]`);
@@ -249,5 +262,31 @@ async function save(group, action, selected, card) {
 }
 document.getElementById('previous').addEventListener('click', () => { if (page > 0) { page--; render(); } });
 document.getElementById('next').addEventListener('click', () => { page++; render(); });
+document.getElementById('cycle-select').addEventListener('change', async event => {
+  const nextCycle = event.target.value;
+  if (busy) { event.target.value = currentCycle; return; }
+  const dirty = audit.groups.some(group => {
+    const draft = selections.get(group.fingerprint);
+    const saved = group.decision?.selected || [];
+    return draft && (draft.size !== saved.length || saved.some(id => !draft.has(id)));
+  });
+  if (dirty && !window.confirm('Discard unsaved flags and switch archive cycle?')) { event.target.value = currentCycle; return; }
+  const previousCycle = currentCycle;
+  currentCycle = nextCycle;
+  event.target.disabled = true;
+  try { await load(false); category = 'all'; page = 0; render(); notice('Saved observations ready for review.'); }
+  catch (error) { currentCycle = previousCycle; event.target.value = previousCycle; notice(error.message, true); }
+  finally { event.target.disabled = false; }
+});
 if (!/^[a-f0-9]{64}$/.test(token)) notice('Open the complete private review URL printed by iarchive, including the part after #.', true);
-else load().then(() => notice('Saved observations ready for review.')).catch(error => notice(error.message, true));
+else (async () => {
+  const data = await (await request('/api/cycles')).json();
+  const select = document.getElementById('cycle-select');
+  for (const cycle of data.cycles) {
+    const option = element('option', '', cycle.cycle);
+    option.value = cycle.cycle;
+    select.append(option);
+  }
+  await load();
+  notice('Saved observations ready for review.');
+})().catch(error => notice(error.message, true));

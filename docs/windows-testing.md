@@ -30,6 +30,7 @@ for that session and needs no administrator terminal.
 Setup detects Rustup/Cargo, uv, MSVC C++ tools and a Windows SDK. Compatible tools
 are reused; missing tools are installed through WinGet. It then installs locked
 project dependencies and builds `target\release\iarchive.exe`.
+The metadata reader stays in `.windows-sandbox\exiftool` and is reused on later runs.
 
 **Prerequisite installers can change Windows outside the checkout** and may ask
 for administrator access. Project tools stay in `.windows-sandbox`; this is a

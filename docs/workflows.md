@@ -26,6 +26,7 @@ With Rust/Cargo and uv installed:
 export CARGO_HOME="$PWD/.cargo-home"
 export UV_CACHE_DIR="$PWD/.uv-cache"
 uv sync --locked --project image-worker --group dev --python 3.12
+uv run --locked --project image-worker python scripts/setup_metadata.py
 cargo build --release --locked
 sh scripts/demo.sh
 ```
@@ -90,6 +91,7 @@ Check the preview before copying:
 
 ```powershell
 .\target\release\iarchive.exe replicate --cycle archive-2026-10-13 --primary-artifacts 'D:\iarchive-artifacts' --secondary-artifacts 'E:\iarchive-artifacts'
+.\target\release\iarchive.exe relationships --cycle archive-2026-10-13
 .\target\release\iarchive.exe review --cycle archive-2026-10-13
 ```
 
@@ -108,6 +110,32 @@ Use the [two-drive tests](windows-two-drive-test.md) before trusting real archiv
 On macOS, use the same command options with `./target/release/iarchive` and your
 volume paths. Replication and deep verification need `--allow-unverified-devices`;
 macOS currently cannot prove physical-drive independence.
+
+## Optional quarantine and restore
+
+After saving flags and stopping review, preview the entire related group:
+
+```powershell
+.\target\release\iarchive.exe --dry-run quarantine --cycle archive-2026-10-13
+```
+
+If blocked, stop and read the findings. Otherwise check every listed file, then
+replace `DIGEST` with the preview's confirmation. Replace `ID` with the resulting
+quarantine ID when restoring:
+
+```powershell
+.\target\release\iarchive.exe quarantine --cycle archive-2026-10-13 --confirm DIGEST
+.\target\release\iarchive.exe --dry-run restore --quarantine-id ID
+.\target\release\iarchive.exe restore --quarantine-id ID
+```
+
+Quarantine keeps the files on the primary drive, beside the media tree, and
+retains an immutable `plan.json`. The secondary originals stay untouched. Unknown
+metadata or unassigned variants block moves; similar names never prove a group.
+Use the [two-drive checks](windows-two-drive-test.md) with synthetic files first.
+
+List cycles with `iarchive cycles`. The gallery's cycle selector changes which
+saved archive you review; it does not rescan its media.
 
 ## Results and reruns
 

@@ -62,6 +62,8 @@ jobs:
       - if: runner.os != 'Windows'
         run: uv sync --locked --project image-worker --group dev
       - if: runner.os != 'Windows'
+        run: uv run --locked --project image-worker python scripts/setup_metadata.py
+      - if: runner.os != 'Windows'
         run: cargo fmt --all -- --check
       - if: runner.os != 'Windows'
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

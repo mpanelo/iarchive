@@ -22,7 +22,9 @@ telemetry. Review decisions are saved notes; they do not move or delete files.
 - Resumable scans and JSONL inventory exports.
 - Raw copying without overwriting conflicts, deep verification and recovery bundles.
 
-Cloud downloads, quarantine, restore and deletion are unavailable in the CLI.
+Confirmed quarantine and restore preserve primary bytes and leave secondary media
+untouched. Unknown relationships block moves. Cloud downloads and deletion are
+unavailable in the CLI.
 Local byte verification does not prove complete iCloud coverage.
 
 ## Get started
@@ -42,6 +44,7 @@ Windows setup installs missing prerequisites and builds the app. macOS builds
 need Rust/Cargo and [uv](https://docs.astral.sh/uv/). Image analysis uses managed
 Python 3.12–3.14; raw inventory and copying work without it. Initial setup needs
 internet access. See [Windows setup](docs/windows-testing.md) for installer details.
+Relationship checks use a pinned, project-local ExifTool reader.
 
 ## Commands
 
@@ -56,6 +59,10 @@ internet access. See [Windows setup](docs/windows-testing.md) for installer deta
 | `export-manifest` | Export the inventory. |
 | `replicate` | Copy raw files and verify both roots. |
 | `review` | Browse previews and save review notes. |
+| `relationships` | Read metadata links between local variants. |
+| `quarantine` | Preview and confirm reversible primary moves. |
+| `restore` | Return quarantined files without overwriting. |
+| `cycles` | List saved archive cycles. |
 | `verify --deep` | Rehash both roots and refresh backup bundles. |
 | `status` | Show saved state. |
 

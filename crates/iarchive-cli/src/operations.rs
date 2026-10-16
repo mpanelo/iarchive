@@ -369,7 +369,7 @@ pub fn audit(
     store.finish_audit(cycle, complete)?;
     emit(
         cli,
-        &serde_json::json!({"status":store.status(cycle)?,"analysis_cache_hits":hits,"decoded_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree; at most 64 neighbors and one pair suggestion per image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; videos, RAW and unknown media are not visually audited"}),
+        &serde_json::json!({"status":store.status(cycle)?,"analysis_cache_hits":hits,"decoded_images":analyzed.len()-hits,"analyzed_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree; at most 64 neighbors and one pair suggestion per image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; videos, RAW and unknown media are not visually audited"}),
     )?;
     Ok(if visual {
         complete

@@ -9,6 +9,7 @@ use std::{
     path::Path,
 };
 
+pub mod quarantine;
 pub mod replica;
 pub mod volume;
 

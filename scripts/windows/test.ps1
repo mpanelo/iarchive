@@ -39,6 +39,7 @@ try {
     if (-not $SmokeOnly) {
         Require-Application cargo
         Invoke-CheckedNative uv @('sync', '--locked', '--project', 'image-worker', '--group', 'dev', '--python', '3.12')
+        Invoke-CheckedNative uv @('run', '--locked', '--project', 'image-worker', 'python', 'scripts/setup_metadata.py')
         Invoke-CheckedNative cargo @('fmt', '--all', '--', '--check')
         Invoke-CheckedNative cargo @('clippy', '--workspace', '--all-targets', '--all-features', '--locked', '--', '-D', 'warnings')
         $env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'

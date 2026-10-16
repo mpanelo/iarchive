@@ -1,20 +1,26 @@
 # Safety
 
-- Source media stays unchanged. Replication writes only to the selected replica
-  and never overwrites conflicts or removes extras.
+- Inventory, analysis and review leave media unchanged. Replication never
+  overwrites conflicts or removes extras. Confirmed quarantine only moves primary
+  bytes into a journaled directory on the same volume; restore returns those bytes.
 - Keep state, previews, exports and bundles outside media. Linked paths, traversal
   and unsafe output destinations are refused.
 - Unknown, unreadable, partial, missing or undecodable files remain findings.
   Each file variant stays separate; names alone do not prove relationships.
 - Review decisions are notes, never permission to move or remove files.
-- Cloud authentication/downloads, quarantine, restore and deletion are unavailable
-  in the CLI. There is no telemetry or media upload.
+- Quarantine requires an exact current confirmation, known metadata relationships,
+  successful image analysis, and fresh verification of the entire raw backup.
+  Unknown or unassigned variants block moves. Restore never overwrites conflicts.
+- Cloud authentication/downloads and permanent deletion are unavailable in the
+  CLI. There is no telemetry or media upload.
 
 ## What verification means
 
 Deep replica verification independently hashes both roots. Cached inventory,
 `status` and `report` do not prove current byte equality. New scans and replica
 operations invalidate saved completion.
+Quarantined files remain accounted for by their immutable journal and original
+hashes. Interrupted jobs require resume or restore before reindexing or copying.
 
 Local bytes, physical-drive independence and cloud coverage are separate results.
 Two copies on one disk are not independent backups. Nothing here proves completed
