@@ -238,7 +238,11 @@ pub fn audit(
     let visual = categories.contains("similar") || categories.contains("dark");
     if visual {
         for registered in store.roots()? {
-            ensure_separate(&project, &registered)?;
+            let reserved = absolute_destination(&registered)?;
+            ensure!(
+                !project.starts_with(&reserved) && !reserved.starts_with(&project),
+                "worker and archive roots must not overlap"
+            );
         }
         ensure!(
             crate::worker::python(&project).is_file(),
@@ -342,21 +346,28 @@ pub fn audit(
     }
     if categories.contains("similar") {
         let mut tree = HashTree::default();
-        for (i, (id, f)) in analyzed.iter().enumerate() {
-            let hash = u64::from_str_radix(&f.phash, 16)?;
+        let mut comparisons = store.other_image_analysis(cycle)?;
+        for (i, (_, f)) in comparisons.iter().enumerate() {
+            if f.edge_energy >= 1.0 && f.dark_candidate_score < 0.65 {
+                tree.insert(u64::from_str_radix(&f.phash, 16)?, i);
+            }
+        }
+        for (id, f) in &analyzed {
             if f.edge_energy < 1.0 || f.dark_candidate_score >= 0.65 {
                 continue;
             }
+            let hash = u64::from_str_radix(&f.phash, 16)?;
             for j in tree.query_limited(hash, 6, 64) {
-                let (other_id, other) = &analyzed[j];
+                let (other_id, other) = &comparisons[j];
                 let aspect = f.width as f64 / f.height as f64;
                 let other_aspect = other.width as f64 / other.height as f64;
                 if (aspect / other_aspect - 1.0).abs() <= 0.10 {
-                    store.candidate(cycle,"similar",&format!("64-bit pHash distance {}; similar aspect ratio; no reliable capture-time mapping. Pairwise suggestion; human review only.",(hash^u64::from_str_radix(&other.phash,16)?).count_ones()),&[*other_id,*id])?;
+                    store.candidate(cycle,"similar",&format!("64-bit pHash distance {}; similar aspect ratio; no reliable capture-time mapping. Other cycles use saved analysis; their media was not rechecked. Pairwise suggestion; human review only.",(hash^u64::from_str_radix(&other.phash,16)?).count_ones()),&[*other_id,*id])?;
                     break;
                 }
             }
-            tree.insert(hash, i);
+            tree.insert(hash, comparisons.len());
+            comparisons.push((*id, f.clone()));
         }
     }
     let status = store.status(cycle)?;
@@ -369,7 +380,7 @@ pub fn audit(
     store.finish_audit(cycle, complete)?;
     emit(
         cli,
-        &serde_json::json!({"status":store.status(cycle)?,"analysis_cache_hits":hits,"decoded_images":analyzed.len()-hits,"analyzed_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree; at most 64 neighbors and one pair suggestion per image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; videos, RAW and unknown media are not visually audited"}),
+        &serde_json::json!({"status":store.status(cycle)?,"analysis_cache_hits":hits,"decoded_images":analyzed.len()-hits,"analyzed_images":analyzed.len(),"decode_errors":decode_errors,"thumbnail_cache_bytes":cache_bytes,"thumbnail_cache_limit_bytes":cache_limit,"similarity_search":"BK-tree across the selected cycle and saved analysis from other cycles; at most 64 neighbors and one pair suggestion per current image; candidate list is not exhaustive","categories":categories,"candidates":store.candidates(cycle)?,"findings":store.findings(cycle)?,"review_only":true,"note":"No files moved or deleted; other cycles are not rescanned; videos, RAW and unknown media are not visually audited"}),
     )?;
     Ok(if visual {
         complete

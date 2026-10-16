@@ -44,6 +44,10 @@ and a 1024 MiB thumbnail cache. Change these with `--categories`,
 `--timeout-seconds` and `--cache-limit-mib`. Exact-only audit needs no Python
 worker and does not claim a complete visual audit.
 
+Exact and similar matches can include other cycles in the same state directory.
+Similarity uses their saved analysis without rescanning their media, so earlier
+drives can be disconnected. These are review suggestions, not fresh backup checks.
+
 ## Exit codes
 
 | Code | Meaning |

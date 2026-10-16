@@ -475,6 +475,22 @@ impl Store {
         json.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
     }
 
+    /// Saved image observations from other cycles; never opens their media.
+    /// Excludes analysis that no longer matches the recorded inventory or algorithm.
+    pub fn other_image_analysis(&self, cycle: &str) -> Result<Vec<(i64, ImageFeatures)>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT f.id,a.features_json FROM file_item f JOIN analysis a ON a.file_id=f.id AND a.sha256=f.sha256 AND a.algorithm_version=?2 WHERE f.cycle_id!=?1 AND f.present=1 AND f.kind='image' AND f.error IS NULL AND a.error IS NULL AND a.features_json IS NOT NULL ORDER BY f.cycle_id,f.relative_path,f.id",
+        )?;
+        let rows = stmt
+            .query_map(params![cycle, iarchive_core::ALGORITHM_VERSION], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(id, json)| Ok((id, serde_json::from_str(&json)?)))
+            .collect()
+    }
+
     pub fn save_analysis(
         &self,
         id: i64,
@@ -803,6 +819,83 @@ mod tests {
             assert_eq!(s.roots().unwrap().len(), 1);
             assert_eq!(s.status("test").unwrap().cloud_coverage, "NOT VERIFIED");
             assert!(s.import("test", Path::new("different")).is_err());
+        }
+    }
+
+    #[test]
+    fn saved_analysis_tracks_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("db.sqlite")).unwrap();
+        let features = ImageFeatures {
+            algorithm_version: iarchive_core::ALGORITHM_VERSION.into(),
+            phash: "0123456789abcdef".into(),
+            width: 160,
+            height: 100,
+            p50: 100.0,
+            p95: 200.0,
+            near_black_share: 0.0,
+            edge_energy: 2.0,
+            sharpness: 10.0,
+            dark_candidate_score: 0.0,
+            dark_reason: "Synthetic scene".into(),
+            thumbnail: "recorded-preview.jpg".into(),
+        };
+        let hash = "a".repeat(64);
+        for cycle in ["old", "new"] {
+            store.import(cycle, &dir.path().join(cycle)).unwrap();
+            let scan = store.begin_scan(cycle).unwrap();
+            store
+                .save_file(
+                    cycle,
+                    scan,
+                    &FileFact {
+                        relative_path: "photo.png".into(),
+                        path_key: "photo.png".into(),
+                        kind: iarchive_core::FileKind::Image,
+                        byte_count: 3,
+                        mtime_ns: "1".into(),
+                        sha256: Some(hash.clone()),
+                        error: None,
+                        warnings: vec![],
+                    },
+                )
+                .unwrap();
+            store.finish_scan(cycle, scan, true).unwrap();
+            let id = store.image_files(cycle).unwrap()[0].0;
+            store
+                .save_analysis(
+                    id,
+                    &hash,
+                    &Ok(features.clone()),
+                    iarchive_core::ALGORITHM_VERSION,
+                )
+                .unwrap();
+        }
+        let id = store.image_files("old").unwrap()[0].0;
+        let saved = store.other_image_analysis("new").unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, id);
+        assert_eq!(saved[0].1.phash, features.phash);
+        for sql in [
+            "UPDATE file_item SET present=0 WHERE id=?1",
+            "UPDATE file_item SET error='unreadable' WHERE id=?1",
+            "UPDATE file_item SET kind='video' WHERE id=?1",
+            "UPDATE file_item SET sha256='changed' WHERE id=?1",
+            "UPDATE analysis SET sha256='stale' WHERE file_id=?1",
+            "UPDATE analysis SET algorithm_version='obsolete' WHERE file_id=?1",
+            "UPDATE analysis SET error='decode failed' WHERE file_id=?1",
+            "UPDATE analysis SET features_json=NULL WHERE file_id=?1",
+        ] {
+            store.connection.execute_batch("SAVEPOINT stale").unwrap();
+            store.connection.execute(sql, [id]).unwrap();
+            assert!(
+                store.other_image_analysis("new").unwrap().is_empty(),
+                "{sql}"
+            );
+            store
+                .connection
+                .execute_batch("ROLLBACK TO stale; RELEASE stale")
+                .unwrap();
         }
     }
 

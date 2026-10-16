@@ -132,4 +132,62 @@ fn audit_round_trip() {
             .iter()
             .all(|m| m["relative_path"] != "corrupt.heic")
     }));
+
+    let previous = || {
+        let store = iarchive_store::Store::open_readonly(&state.join("manifest.sqlite")).unwrap();
+        serde_json::to_value(store.review_snapshot("x").unwrap()).unwrap()
+    };
+    let saved = previous();
+    let next = dir.path().join("next media");
+    std::fs::create_dir(&next).unwrap();
+    std::fs::copy(source.join("recompressed.png"), next.join("new.png")).unwrap();
+    let offline = dir.path().join("offline media");
+    std::fs::rename(&source, &offline).unwrap();
+    assert!(
+        run(
+            &state,
+            &[
+                "import",
+                "--source",
+                next.to_str().unwrap(),
+                "--cycle",
+                "next"
+            ]
+        )
+        .status
+        .success()
+    );
+    let output = run(
+        &state,
+        &[
+            "audit",
+            "--cycle",
+            "next",
+            "--categories",
+            "similar",
+            "--worker-project",
+            project.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["decoded_images"], 1);
+    assert_eq!(report["status"]["cloud_coverage"], "NOT VERIFIED");
+    let groups = report["candidates"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["type"], "similar");
+    let members = groups[0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    assert!(members.iter().any(|m| m["cycle"] == "next"));
+    let earlier = members.iter().find(|m| m["cycle"] == "x").unwrap();
+    assert_ne!(
+        iarchive_fs::hash_file(&offline.join(earlier["relative_path"].as_str().unwrap())).unwrap(),
+        iarchive_fs::hash_file(&next.join("new.png")).unwrap(),
+        "similarity must find a match with different bytes"
+    );
+    assert_eq!(previous(), saved, "earlier review state changed");
 }
