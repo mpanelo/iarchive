@@ -51,6 +51,7 @@ try {
         Assert-Check ($result.passed -and $result.files -eq 3 -and $result.recovery_backups -eq 2) 'Workflow did not cover both recoveries.'
         Assert-Check ($result.independent_physical_drives -eq 'NOT VERIFIED') 'Same-volume workflow claimed physical independence.'
         Assert-Check (-not $result.restored_identity_changed -and $result.final_cycle -eq 'synthetic') 'Stable root unexpectedly needed a new cycle.'
+        Assert-Check ($result.final_state -eq $layout.state) 'Stable root unexpectedly changed state directories.'
     }
     Test-Case 'Restored root identity changes' {
         $layout = New-TestLayout 'changed identity'
@@ -67,11 +68,21 @@ try {
         }
         $result = Invoke-ReplicaAcceptance $Exe $layout.source $layout.secondary $layout['primary-artifacts'] $layout['secondary-artifacts'] $layout.state $layout.reports 'synthetic' -RequireIndependentDrives $false
         Assert-Check ($result.passed -and $result.restored_identity_changed -and $result.final_cycle -eq 'synthetic-restored') 'Changed identity did not require a fresh cycle.'
+        Assert-Check ($result.final_state -ne $layout.state) 'Replacement root reused the original state directory.'
         $old = Get-Content -LiteralPath (Join-Path $layout.reports 'restored-verify.json') -Raw | ConvertFrom-Json
         Assert-Check (-not $old.complete -and $old.verified_files -eq 0) 'Old binding accepted the replacement root.'
         $final = Get-Content -LiteralPath $result.final_report -Raw | ConvertFrom-Json
         Assert-ReplicaComplete $final 3
         Assert-Check ($final.copied_files -eq 0 -and $final.cycle -eq 'synthetic-restored') 'Fresh verification copied media or reused the old cycle.'
+        $cycles = Invoke-IarchiveJson $Exe $layout.state $layout.reports 'original-cycles' @('cycles')
+        Assert-Check (@($cycles.cycles).Count -eq 1 -and $cycles.cycles[0].cycle -eq 'synthetic') 'Recovery changed the original cycle registry.'
+        $retained = Invoke-IarchiveJson $Exe $layout.state $layout.reports 'retained-binding' @(
+            'verify', '--deep', '--cycle', 'synthetic', '--secondary', $layout.secondary,
+            '--primary-artifacts', $layout['primary-artifacts'], '--secondary-artifacts', $layout['secondary-artifacts'],
+            '--allow-unverified-devices'
+        ) 2
+        Assert-Check (-not $retained.complete -and $retained.verified_files -eq 0 -and
+            @($retained.issues).Count -eq 1 -and $retained.issues[0] -eq $old.issues[0]) 'Recovery replaced the original root binding.'
     }
     Test-Case 'Same-volume topology refusal' {
         $layout = New-TestLayout 'topology'

@@ -41,7 +41,8 @@ See [setup help](windows-testing.md) if needed.
 This checks copying, reruns, hashes, both backup recoveries, corruption, missing
 files and an unavailable folder. It requires Windows to report distinct physical
 disks. On exFAT, a restored folder may get a new identity; the script checks the
-old cycle's refusal, then verifies the unchanged files in a new cycle.
+old cycle's refusal, then verifies the unchanged files in a fresh state directory.
+The summary's `final_state` points to the state used for final verification.
 
 Wait for `PASS`.
 
