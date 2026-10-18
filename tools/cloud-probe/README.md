@@ -369,7 +369,7 @@ unavailable; these findings do not authorize deletion.
 
 | Mechanism | Finding |
 | --- | --- |
-| `update` with `recordChangeTag` | Already present in the pinned removal request. Both Favorite trials accepted an older tag. Deletion behavior remains unknown. |
+| `update` with `recordChangeTag` | Already present in the pinned removal request. Both Favorite trials accepted an older tag. Rejection of stale deletion tags remains unverified. |
 | `atomic: true` | Groups submitted operations; it does not condition a write on omitted master/resource records or the whole inventory. |
 | Change-feed `syncToken` | A read checkpoint. The documented modification request has no whole-zone token condition. `getCurrentSyncToken: true` did not prevent the observed stale Favorite update. |
 | `replace` or `delete` | Different mutations, not extra guards for the Photos `isDeleted` update. Replacing can clear omitted fields; deleting a CloudKit record does not establish Photos removal or recovery behavior. |
@@ -387,11 +387,14 @@ research requires a concrete server-enforced condition and separately approved
 evidence for Photos behavior, resource changes and recovery. Manual selection in
 Photos remains a user action; local reports cannot certify it as safe removal.
 
-A separate [one-photo trial](../../docs/cloud-cleanup-trial.md) is now prepared
-with offline tests. It defaults to preserving the upload-evidence-bound synthetic
-JPEG without authentication. Its live mode needs separate approval for one
-original download and one soft-delete request, followed by manual restoration
-and metadata checks. No live deletion result has been established by these tests.
+The separate [one-photo trial](../../docs/cloud-cleanup-trial.md#recorded-result)
+completed on macOS on October 18, 2026 (UTC). One original download matched the
+synthetic source's SHA-256, and one soft-delete update was accepted. The album
+changed from five items to four, then back to five after manual restoration.
+The other items stayed unchanged; restored identity and resource metadata matched.
+Recently Deleted visibility was user-reported. Stale-tag rejection, restored
+remote bytes and reclaimed storage remain unverified. Preparation defaults to
+offline; each live run still needs separate approval.
 
 ## Keep outputs private
 
@@ -426,7 +429,7 @@ archives are never development fixtures.
 The pinned removal helper includes the asset's version tag, but no separate
 master/resource versions or inventory condition. Apple documents conflict
 rejection for that general CloudKit request form; the Photos Favorite trials
-accepted stale tags, and Photos deletion behavior remains unverified.
+accepted stale tags. Stale-tag rejection for Photos deletion remains unverified.
 Our offline integration test invokes the real helper with synthetic records and
 proves that every probe scope blocks it before transport. See the
 [concurrency findings](../cloud-prototype/README.md#what-remains-unproved) for

@@ -2,7 +2,8 @@
 
 This research helper is separate from the archive CLI and the cleanup demo.
 It accepts only the synthetic JPEG bound to the saved upload experiment.
-**The live trial has not been run.** Preparing it does not authorize a live run.
+A separately approved macOS trial completed; see the [recorded result](#recorded-result).
+Each live run requires separate approval.
 
 ## Prepare offline
 
@@ -61,3 +62,23 @@ Observe iCloud storage usage manually before and after; the helper does not quer
 quota or claim reclaimed space. Never empty Recently Deleted for this trial.
 Both local files are on one filesystem, so this does not establish independent
 backups or authorize cleanup of real archives.
+
+## Recorded result
+
+One approved macOS trial completed on October 18, 2026 (UTC):
+
+- One original download, three targeted asset/master lookups and one accepted
+  soft-delete update. The saved plan and durable intent matched that one item.
+- Album count changed **5 → 4 → 5** after manual restoration. The other four items
+  stayed unchanged; the restored target's identity and resource metadata matched.
+- The source, recovery copy and downloaded original had matching SHA-256 hashes
+  before removal and after restoration.
+
+Recently Deleted visibility and manual restoration were user-reported. The
+helper verified the soft-delete flag, then restored membership and metadata.
+An offline evidence check confirmed the saved plan, observations and local hashes
+without making further cloud requests.
+
+Concurrency protection, complete cloud/resource coverage, relationship ownership,
+independent physical backups, restored remote bytes and reclaimed space remain
+**NOT VERIFIED**. This one-item result does not enable archive cleanup.
