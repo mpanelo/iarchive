@@ -42,7 +42,7 @@ the journal instead. Journal files are numbered, identical events at all three
 locations. An interrupted write can leave incomplete copies; that is a failure,
 not permission to continue.
 
-## Before live cleanup
+## Limits
 
 The two folders are on one filesystem. This demo does not prove independent
 drives, real cloud-to-file relationships, full cloud coverage or recovery.
@@ -52,12 +52,10 @@ A preflight check cannot prevent an edit between the check and removal. The
 mock deliberately accepts that race; a failed post-check stops subsequent
 targets but cannot undo an accepted request.
 
-Live execution needs separate implementation and approval, verified resource
-bindings on both drives, explicit acceptance of this race, and a disposable-item
-trial for deletion, Recently Deleted, recovery and when storage is reclaimed.
-No automatic emptying of Recently Deleted is planned.
-
-The separate [one-photo trial](cloud-cleanup-trial.md) defaults to offline
-preparation. Its live mode needs its own approval.
+Archive cleanup still needs separate implementation and approval, verified
+resource bindings on both drives, and explicit acceptance of this race. The
+[one-photo trial](cloud-cleanup-trial.md#recorded-result) records the bounded
+soft-delete/recovery evidence and remaining gaps. It does not enable archive
+cleanup. No automatic emptying of Recently Deleted is planned.
 
 [Research findings](../tools/cloud-probe/README.md#concurrency-decision)

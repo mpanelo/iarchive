@@ -6,18 +6,10 @@ in a fresh temporary directory and retains them for inspection.
 
 ## Run
 
-Python 3.12 or newer; no extra Python packages. Reconciliation tests also use the
-built archive CLI:
+Python 3.12 or newer; no extra Python packages. Tests also use the built archive CLI:
 
 ```sh
 cargo build --locked -p iarchive
-python3 -m unittest discover -s tools/cloud-prototype -v
-python3 tools/cloud-prototype/demo.py
-```
-
-Windows uses `python` instead of `python3`. With the project environment:
-
-```sh
 uv run --locked --project image-worker python -m unittest discover -s tools/cloud-prototype -v
 uv run --locked --project image-worker python tools/cloud-prototype/demo.py
 ```
@@ -26,12 +18,6 @@ The default demo creates a sealed plan. Add `--simulate` to exercise the mock
 operation. Type its printed phrase with the exact count and full plan digest.
 Only mock memory changes; fixture bytes remain unchanged. Refused confirmation
 or blocked operations exit nonzero.
-
-Repository checks also run the suite:
-
-```sh
-uv run --locked --project image-worker python -m unittest discover -s tests -v
-```
 
 ## What is tested
 
@@ -50,10 +36,8 @@ uv run --locked --project image-worker python -m unittest discover -s tests -v
   reconcile them; uncertain requests are never blindly retried.
 - Retention in mock Recently Deleted. There is no expunge operation.
 
-Tests forbid sockets. They also cover traversal, links, simulated reparse
-attributes, disconnected replicas, stale credentials, scope changes, malformed
-responses, interrupted audits and safe resume. Simulated Windows attributes do
-not prove native junction behavior.
+Tests forbid sockets and cover path, credential, scope, interruption and response
+failures. Simulated Windows attributes do not prove native junction behavior.
 
 ## Outputs
 
@@ -110,76 +94,16 @@ stable generations, authoritative relationships and atomic conditional operation
 have not been established for the live provider. Synthetic checksums must never
 be substituted for opaque provider checksums.
 
-Source inspection of icloudpd 1.32.3 found:
-
-- `PhotoAsset.id` identifies a master; removal targets a separate asset record.
-- The helper sends `update` with that asset's `recordChangeTag` and `atomic: true`.
-  It sends no master/resource versions or inventory generation condition.
-- The removal helper does not inspect per-record responses.
-- Rank-based enumeration can miss concurrent changes.
-- The version map omits some resources.
-
-See the pinned [photo service](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/pyicloud_ipd/services/photos.py)
-and [operation helper](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/icloudpd/base.py#L808).
-
-Apple documents conflict rejection for `update` with a record change tag.
-`atomic` groups the submitted operations in a custom zone; it does not provide
-a condition on records omitted from the request. Successful HTTP transport also
-does not establish per-record success. See [CloudKit modifications](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/ModifyRecords.html)
-and [record tags](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/Types.html#//apple_ref/doc/uid/TP40015240-CH3-SW1).
-These are general CloudKit contracts, not documentation of the private Photos API.
-
 The mock race test changes an asset, master, resource or inventory generation
 after preflight. It also inserts a newly uploaded old-dated asset. Rejection
 retains all media, stops later targets and records an uncertain attempt. This
 tests the mock's intended guarantees, not Photos server behavior.
 
-Still unverified: whether the upstream removal request rejects stale asset tags
-and whether master/resource changes always invalidate the asset tag. A separate
-Favorite experiment accepted a stale-tag update, as recorded below. The request
-contains no whole-inventory condition. The ordinary read-only probe blocks the
-real pinned removal helper before transport in every scope.
-
-Existing filenames cannot supply full identities or relationships. Future download
-manifests need those bindings; existing media needs content reconciliation.
-Complete library coverage, server mutation semantics, account compatibility,
-remote checksum meaning and recovery behavior remain open.
+See the probe's [recorded observations](../cloud-probe/README.md#recorded-observations)
+and [concurrency decision](../cloud-probe/README.md#concurrency-decision) for live
+findings, upstream request behavior and sources. The mock's atomic checks are
+stronger than anything established for Photos. No automated removal is enabled.
 
 The prototype uses trusted temporary directories. Path checks are not OS isolation
 against hostile concurrent replacements. Production durability, device identity,
 approval integrity and audit design need further work. Run one writer per state.
-
-Read-only observations and offline tests cannot establish server mutation
-semantics. Any live conflict experiment needs its own bounded plan and explicit
-approval. Removal remains unavailable while these guarantees are unproved.
-
-A separately guarded [Favorite conflict experiment](../cloud-probe/README.md#favorite-conflict-experiment)
-is prepared with offline tests. It allows one stale-tag metadata update on the
-synthetic upload, then checks the exact record outcome. Its first live preflight
-stopped on unknown Favorite/master metadata before any update. A read-only check
-then found a matching master reference but no `isFavorite` field. After a manual
-Favorite change, a second diagnostic returned an explicit integer and a new
-version tag. Omission stays unknown.
-
-The revised live trial observed Favorite on at both captures around a manual
-off/on cycle, with different version tags. A single stale-tag Favorite-clear
-request was accepted; a fresh lookup and album capture confirmed Favorite off
-and a new target tag. Other captured metadata stayed unchanged. This is negative
-evidence for the tested request's conflict protection, not proof of deletion
-semantics. No media was downloaded or removed.
-
-That experiment omitted the pinned Photos wrapper's `remapEnums` and
-`getCurrentSyncToken` flags. The helper now adds them to targeted requests and
-records their values with the request evidence. Offline comparison confirms
-the prepared common query parameters and body match the real pinned request;
-the written field and return selection intentionally differ. A live repeat on
-October 17, 2026 with both flags enabled also accepted one stale-tag update:
-Favorite changed from `1` to `0`, with a new target tag and unchanged other
-captured metadata. No media was downloaded or removed.
-
-The bounded offline review found no additional enforceable condition in the
-pinned provider or the documented modification request. See the
-[concurrency decision](../cloud-probe/README.md#concurrency-decision) for the
-alternatives and limits. Master/resource protection and removal semantics remain
-unproved. No automated removal is enabled; the mock remains an intended policy,
-not evidence that Photos enforces it.

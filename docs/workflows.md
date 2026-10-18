@@ -149,22 +149,14 @@ file still present or a missing original keeps the inventory incomplete.
 
 ## Results and reruns
 
-- `cycles`, `status`, `index` and `audit` print short summaries. Add `--json` for
-  full reports; progress messages go to stderr.
 - A successful copy or deep check reports `complete: true` and
   `local_replica: LOCAL BYTES VERIFIED`.
 - A preview reports `complete: false` because it has not copied anything.
-- `status` shows saved state, not a fresh byte check. Its local byte status remains
-  `NOT VERIFIED` even after successful verification.
-- Final verification saves fresh bundles with your review notes. Each contains
-  `manifest.jsonl`, `manifest.sqlite` and `summary.json`.
-- Exit 1 means an error; exit 2 means findings or incomplete checks. Inspect the
-  report before continuing. Videos can remain visually unaudited while raw-byte
-  copying succeeds.
+- `status` shows saved state, not a fresh byte check.
+- Inspect any error or incomplete result before continuing. See
+  [exit codes](CLI.md#exit-codes) for details.
 - After interruption, reconnect the drive and rerun the same copy command.
-  Matching files are rehashed and skipped; conflicts and extras are kept.
 - A new index or audit invalidates saved verification and current review decisions.
-- Use a new cycle for an intentionally changed snapshot and a fresh filename for
-  each inventory export. Demo scripts always create a fresh run.
+- Use a new cycle for an intentionally changed snapshot and a fresh export filename.
 
 [CLI options](CLI.md) · [Review controls](review.md) · [Recovery](replication.md#results-and-recovery) · [Safety](safety.md)

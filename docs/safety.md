@@ -39,5 +39,5 @@ hostile local process racing directory replacements. Pause other archive writers
 Reports contain local paths; cloud research outputs may contain account IDs and
 session files. Keep them private. Decoder errors use safe categories.
 
-Use synthetic fixtures in development. See [build results](build-report.md) for
-what has actually been tested.
+Use synthetic fixtures in development. See [recorded checks](development.md#recorded-manual-checks)
+for manual evidence and untested behavior.

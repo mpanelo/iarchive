@@ -36,11 +36,19 @@ uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest dis
 ```
 
 In PowerShell, set `$env:IARCHIVE_REQUIRE_WORKER_TESTS = '1'` before Cargo tests.
-Install the worker first. CI requires it and the cloud probe's pinned environment;
-missing dependencies must fail rather than skip those checks.
+The worker, pinned ExifTool and cloud probe dependencies are required; missing
+dependencies must fail rather than skip integration checks.
 
 Clippy warnings are errors. Add stricter lints only when useful; do not enable
 whole pedantic or restriction groups.
+
+### CI
+
+CI runs Rust/Python suites on macOS and Windows and dependency checks on Linux.
+Windows checks prerequisite discovery and simulated installation under PowerShell
+5.1 and 7; setup uses `-SkipPrerequisites` to prevent real installers.
+Same-volume smoke tests use `C:` and upload `windows-script-reports`. These do
+not establish clean-machine installation or external-drive behavior.
 
 ## Secrets
 
@@ -70,6 +78,52 @@ with `cargo update` or `uv lock --project <project>`; CI uses the committed lock
 ignored. Duplicate `syn`/`winnow` versions are warnings. Crate-specific license
 allowances cover `option-ext` (MPL-2.0) and Axum's `matchit` (BSD-3-Clause).
 
-CI runs Rust/Python suites on macOS and Windows and dependency checks on Linux.
 Report checks in task summaries or PRs, not commit messages. Follow
 [AGENTS.md](../AGENTS.md) for safety, tests and commits.
+
+## Recorded manual checks
+
+These historical observations used synthetic media. Use [CI](https://github.com/mpanelo/iarchive/actions/workflows/ci.yml)
+for routine checks on a particular commit.
+
+### Windows two-drive run — 2026-10-11
+
+PowerShell 5.1.26100.9444, commit `c3a418ffab1341ffe168989f525372a2b8e167d9`.
+D: was NTFS; E: was exFAT. Windows reported distinct physical disks.
+
+| Check | Result |
+| --- | --- |
+| Automated tests | Passed; smoke checks on C:, D: and E:. Individual counts were not retained. |
+| Copy and rerun | 12 files verified; rerun copied zero. |
+| Recovery | Both drive backups restored into separate state and verified all 12 files. |
+| Corruption | One mismatch blocked completion; no conflict was overwritten. |
+| Missing file | Rejected, then recopied and verified. |
+| Unavailable root | Rejected. exFAT folder identity changed after restoration; the old cycle refused it and a fresh cycle verified all files. |
+| Interruption | A 512 MiB copy stopped with a 10 MiB partial. Status stayed RUNNING/NOT VERIFIED. Resume and deep verification passed. |
+
+Both drive summaries recorded `passed: true`; interruption also recorded
+`interruption.status: PASSED`. Final reports had no issues, missing files or
+mismatches. Source bytes/timestamps and retained partial hashes stayed unchanged.
+Raw reports remain local and untracked:
+
+```text
+.smoke/windows-369ce8fb6d6740a68b9d5c77b5db9ad7/
+.smoke/two-drive-b583cc97b7f846c19693aaabd4ca891a/
+.smoke/two-drive-interruption-6b4e4d894808465bbd29f354844737cf/
+```
+
+### macOS gallery and script checks — 2026-10-11
+
+Firefox displayed synthetic JPEG/HEIC previews side by side. Saving a flag updated
+the Reviewed filter; corrupt HEIC and unknown files remained findings. All 11
+source hashes/timestamps stayed unchanged. Ctrl+C stopped the server cleanly.
+
+Portable PowerShell 7.5.4 passed three cases on macOS: workflow acceptance,
+same-volume refusal and stopping only an owned child, including cleanup after
+failed observation. A separate 512 MiB copy was stopped, resumed and verified
+without changing source bytes/timestamps or the retained partial.
+
+These runs did not establish Windows browser acceptance, PowerShell 7 runtime
+on Windows, physical USB disconnects, graceful copy cancellation, large-library
+performance, minimum-compiler compatibility or complete iCloud coverage.
+Cloud experiments have [separate evidence](../tools/cloud-probe/README.md#recorded-observations).

@@ -51,11 +51,9 @@ Exact and similar matches can include other cycles in the same state directory.
 Similarity uses their saved analysis without rescanning their media, so earlier
 drives can be disconnected. These are review suggestions, not fresh backup checks.
 
-After an interrupted download, finish it with your downloader, pause it, then
-rerun `audit` for that cycle. Unchanged images reuse cached analysis. Temporary
-files still present and missing originals block completion; retired temporary
-entries remain in manifest history. Local completion never proves cloud coverage.
-Audit still rehashes images before reusing their analysis.
+For interrupted downloads, follow [later downloads](workflows.md#later-downloads).
+Audit rehashes images before reusing their analysis; retired temporary entries
+remain in manifest history.
 
 ## Exit codes
 
@@ -68,23 +66,13 @@ Audit still rehashes images before reusing their analysis.
 Videos can be copied successfully while their visual audit remains incomplete.
 Successful local checks do not prove complete cloud coverage.
 
-After stopping review, preview saved flags:
+## Quarantine recovery
 
-```sh
-iarchive --dry-run quarantine --cycle ID
-```
-
-The preview rehashes the raw backup and all primary bytes. Keep decisions,
-changed copies, and unknown or ambiguous relationships block moves. Check every
-listed file before using its confirmation digest. Related components move
-together to a journaled directory on the primary volume; the raw secondary stays
-unchanged. Restore never overwrites an existing file.
-
+See the workflow for [quarantine and restore commands](workflows.md#optional-quarantine-and-restore).
 Use `--resume ID --confirm DIGEST` to finish an interrupted quarantine, or restore
 its ID to return the files. Stop the gallery first. While a job is active,
 `verify --deep` accounts for quarantined files; index, audit and replicate require
-restoration. `--allow-unverified-devices` acknowledges byte-only copies and keeps
-physical independence **NOT VERIFIED**.
+restoration.
 
 ## State and worker locations
 

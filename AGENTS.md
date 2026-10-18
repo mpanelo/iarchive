@@ -54,7 +54,9 @@ Document the commit message convention
 - Keep automation, exit-code guards and error-handling boilerplate in scripts.
 - Do not make users assemble demo paths, variables or argument arrays. Provide a guided script for multi-step setup and examples with explicit paths for ordinary use.
 - Use one main workflow; link to references instead of repeating them.
+- Give each procedure or finding one authoritative home. Consolidate overlapping pages, update their links, and remove superseded prose instead of appending another explanation.
 - Keep necessary safety limits and exact test evidence. Put implementation details in technical docs.
+- Record unique manual or hardware evidence; use CI and task summaries for routine test results instead of maintaining a test diary.
 
 ## Tests
 
@@ -76,23 +78,11 @@ synthetic-fixture exceptions narrowly. Preserve existing hooks and signing.
 
 Use rustfmt's standard Rust 2024 style and the Rust API Guidelines for public APIs. Run Clippy with warnings treated as errors; enable stricter lints selectively rather than enabling entire pedantic or restriction groups. See [development tooling](docs/development.md) for setup and editor integration.
 
-Use workspace-local caches when sandboxed:
-
-Metadata integration tests also require the pinned project-local ExifTool. Set it
-up with `uv run --locked --project image-worker python scripts/setup_metadata.py`;
-do not skip those tests when it is missing.
-
-```sh
-export CARGO_HOME="$PWD/.cargo-home"
-export UV_CACHE_DIR="$PWD/.uv-cache"
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-IARCHIVE_REQUIRE_WORKER_TESTS=1 cargo test --workspace --all-features --locked
-cargo deny --locked --all-features check
-uv run --locked --project image-worker --group dev pytest image-worker/tests
-uv run --locked --project image-worker python -m unittest discover -s tests -v
-uv run --locked --project tools/cloud-probe --python 3.12 python -m unittest discover -s tools/cloud-probe -v
-```
+Follow the [development setup](docs/development.md#set-up) and run all
+[required checks](docs/development.md#check-changes). Use workspace-local Cargo
+and uv caches when sandboxed. Integration tests require the image worker,
+pinned project-local ExifTool and cloud probe dependencies; missing dependencies
+must fail rather than skip coverage.
 
 CI runs formatting, Clippy, and the full Rust/Python suites on macOS and Windows, plus dependency policy checks on Linux. Do not claim Windows runtime verification without a Windows run. Keep Cargo.lock and image-worker/uv.lock committed alongside dependency changes; CI must use these locks rather than resolving new versions. Review cargo-deny findings and document any narrow exceptions in deny.toml. Rust uses one SQLite writer; do not run concurrent mutating commands against the same state directory.
 

@@ -20,12 +20,6 @@ provider returns an error and exposes no deletion method.
 SQLite uses WAL, foreign keys and one writer. A state-directory lock serializes
 CLI operations. Newer database schemas are rejected.
 
-| Schema | Adds |
-| --- | --- |
-| 1 | Cycles, scans, files, analysis, candidates and transition history. |
-| 2 | Frozen replica bindings, runs and per-file copy progress. |
-| 3 | Append-only review decisions and recorded group snapshots. |
-
 JSONL remains version 1. Files use a cycle ID and normalized relative path;
 absolute roots are mount hints, not permanent identities.
 
@@ -44,9 +38,10 @@ Hashing streams bytes with a 1 MiB reader and 64 KiB blocks, checking size/mtime
 before and after. Scan caches use path, size and mtime; `index --deep` bypasses
 that cache. Replica checks always independently hash both roots.
 
-Exact duplicates mean equal bytes, not equal cloud assets. Classification uses
-extensions. Capture times, original/edited labels and associated-file
-relationships remain unknown. Cross-cycle facts are saved observations.
+Exact duplicates mean equal bytes, not equal cloud assets. Inventory classification
+uses extensions. Metadata-proven local relationships are recorded separately;
+filenames never prove variant links or cloud identity. Cross-cycle facts are
+saved observations.
 
 ## Copying and bundles
 
@@ -122,4 +117,4 @@ future whole-database backups include them.
   isolate the app from hostile local processes racing directory changes.
 - Real USB disconnect/reconnect and minimum-compiler compatibility remain untested.
 
-See [safety](safety.md) and [recorded checks](build-report.md).
+See [safety](safety.md) and [recorded checks](development.md#recorded-manual-checks).

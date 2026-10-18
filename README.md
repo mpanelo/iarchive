@@ -11,8 +11,8 @@ candidates in a local browser gallery.
 > change. Start with the [synthetic walkthrough](docs/workflows.md).
 
 iarchive works with files already on disk, including iCloud Photos downloads.
-Source files stay unchanged. Images are processed locally, with no uploads or
-telemetry. Review decisions are saved notes; they do not move or delete files.
+Inventory, analysis and browser review leave media unchanged. Images are
+processed locally, with no uploads or telemetry.
 
 ## Features
 
@@ -37,47 +37,18 @@ cd iarchive
 ```
 
 Follow the **[guided walkthrough](docs/workflows.md)** for Windows or macOS.
-Its demo script creates synthetic images and takes you through scanning, copying,
-browser review and verification. No manual path or variable setup is needed.
+The demo creates synthetic images and walks through scanning, copying, browser
+review and verification.
 
-Windows setup installs missing prerequisites and builds the app. macOS builds
-need Rust/Cargo and [uv](https://docs.astral.sh/uv/). Image analysis uses managed
-Python 3.12–3.14; raw inventory and copying work without it. Initial setup needs
-internet access. See [Windows setup](docs/windows-testing.md) for installer details.
-Relationship checks use a pinned, project-local ExifTool reader.
-
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `doctor` | Check tools, drives and free space. |
-| `init` | Configure archive paths. |
-| `import` | Register a local archive. |
-| `index` | Inventory and hash files. |
-| `audit` | Analyze images and save candidates. |
-| `report` | Show saved candidates and findings. |
-| `export-manifest` | Export the inventory. |
-| `replicate` | Copy raw files and verify both roots. |
-| `review` | Browse previews and save review notes. |
-| `relationships` | Read metadata links between local variants. |
-| `quarantine` | Preview and confirm reversible primary moves. |
-| `restore` | Return quarantined files without overwriting. |
-| `cycles` | List saved archive cycles. |
-| `verify --deep` | Rehash both roots and refresh backup bundles. |
-| `status` | Show saved state. |
-
-Use `--help` for options. See the [CLI reference](docs/CLI.md) for exit codes.
+Windows setup installs missing prerequisites. macOS needs Rust/Cargo and
+[uv](https://docs.astral.sh/uv/). Initial setup needs internet access.
 
 ## Documentation
 
-- [Guided walkthrough and archive commands](docs/workflows.md)
+- [Workflow](docs/workflows.md) and [CLI reference](docs/CLI.md)
 - [Windows setup and tests](docs/windows-testing.md)
-- [Two-drive tests](docs/windows-two-drive-test.md)
-- [Browser review](docs/review.md)
 - [Replication and recovery](docs/replication.md)
 - [Safety](docs/safety.md)
-- [Architecture](docs/architecture.md)
-- [Build results](docs/build-report.md)
 
 ## Contributing
 
@@ -86,7 +57,7 @@ your operating system and the error. Use synthetic examples and remove private
 paths or account details from logs.
 
 Read [AGENTS.md](AGENTS.md) and the [development guide](docs/development.md).
-CI runs Rust/Python checks on macOS and Windows, plus dependency checks on Linux.
+See [architecture](docs/architecture.md) for implementation details.
 
 ## License
 

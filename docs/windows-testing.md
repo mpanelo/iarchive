@@ -30,8 +30,6 @@ for that session and needs no administrator terminal.
 Setup detects Rustup/Cargo, uv, MSVC C++ tools and a Windows SDK. Compatible tools
 are reused; missing tools are installed through WinGet. It then installs locked
 project dependencies and builds `target\release\iarchive.exe`.
-The metadata reader stays in `.windows-sandbox\exiftool` and is reused on later runs.
-
 **Prerequisite installers can change Windows outside the checkout** and may ask
 for administrator access. Project tools stay in `.windows-sandbox`; this is a
 storage folder, not OS isolation. Profiles and saved execution policies are not
@@ -51,8 +49,8 @@ This runs Rust/Python checks, builds the release executable, then tests the CLI
 with synthetic PNG, JPEG and HEIC files. It checks hashing, cached scans,
 non-overwriting replication, recovery bundles and expected failures.
 
-Run commands separately. Stop and read the error if one fails.
-Missing optional ffprobe or icloudpd is fine; the image worker is required.
+Stop and read the error if a command fails. Missing optional ffprobe or icloudpd
+is fine; the image worker is required.
 
 ## 4. Test external drives
 
@@ -95,9 +93,8 @@ Drive runs also retain generated media, bundles and partials under the marked
 sandbox. Tests deliberately corrupt their own fixtures, so do not reuse them as
 a clean archive. Nothing is cleaned up automatically.
 
-A test failure retains reports when available. A build failure may occur before
-reports are created; use the console error. Passing tests do not prove that your
-real archive or iCloud library is fully backed up.
+If no report was created, use the console error. Passing tests do not prove that
+your real archive or iCloud library is fully backed up.
 
 ## Troubleshooting
 
@@ -108,15 +105,9 @@ script. Organization policies may still restrict scripts.
 
 ### Setup passed, but Cargo is missing
 
-Open a fresh terminal in the checkout. An old terminal may still have the PATH
-from before installation. For the standard Rust installation, you can also use:
-
-```powershell
-$env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
-.\scripts\windows\test.ps1
-```
-
-For a custom installation, use its Cargo launcher directory instead.
+Open a fresh terminal in the checkout, repeat the session policy command and
+retry. An old terminal may have the PATH from before installation. For custom
+Rust installations, make sure the Cargo launcher directory is on PATH.
 
 ### A prerequisite cannot be installed
 
@@ -146,15 +137,5 @@ winget upgrade --exact --id astral-sh.uv --source winget
 
 These installers can change Windows outside the checkout.
 [Rust prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html) · [uv installation](https://docs.astral.sh/uv/getting-started/installation/)
-
-## CI
-
-CI checks prerequisite discovery and simulated installation in both PowerShell
-versions. Its setup uses `-SkipPrerequisites` to prevent real installers.
-Normal setup does not need that option.
-
-CI runs full tests and same-volume smoke checks on `C:`. Reports are uploaded as
-`windows-script-reports`. This does not test clean-machine installation or real
-external-drive behavior.
 
 Continue with the [full workflow](workflows.md) to use the CLI yourself.

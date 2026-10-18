@@ -104,23 +104,11 @@ unreferenced masters and unknown fields remain findings. Ambiguous resources
 stay separate. Pair confidence remains `unknown`; record links do not prove
 media content relationships.
 
-Offline fixtures cover originals, renders, motion, video, sidecars and RAW/JPEG.
-`resources.build_resource_report()` can compare full asset IDs with explicit
-expected field lists. Live runs currently use `expectation_status: NOT PROVIDED`.
-Even `MATCHED OBSERVED FIELDS` proves metadata agreement only. Unrequested or
-unknown variants may remain undiscovered.
+Live runs use `expectation_status: NOT PROVIDED`. Offline comparisons can check
+explicit expected fields; even `MATCHED OBSERVED FIELDS` proves metadata agreement
+only. Unrequested or unknown variants may remain undiscovered.
 
 ## Investigate a change feed
-
-A live traversal completed in two linked batches: 113 initial pages containing
-10,912 metadata records, then one empty delta page. An earlier 10-page experiment
-stopped at its cap. After a Favorite toggle in a four-item test album, exactly
-one asset changed version tag. A one-page delta returned that same full asset ID
-and the tag seen in a fresh album capture, plus three unrelated metadata records.
-Membership, master records and other requested asset fields stayed unchanged.
-The Favorite value itself was not requested. The upload test below separately
-checked new-upload detection. An atomic guard against later changes remains
-unverified.
 
 This scope reads beyond an album. Agree on the account and entire private zone
 first; prefer a disposable account. Earlier album approval does not cover this scope.
@@ -197,14 +185,6 @@ added dates with the baseline; keep the earlier selection unchanged. No media
 downloads are needed. This tests observed new-upload detection, not complete
 coverage or protection against later changes.
 
-A live five-item test detected one added album member with a capture date of
-January 2, 2001 and an added date between the pre/post-upload checkpoints. Its
-full asset ID and version tag matched the post-upload delta, which returned seven
-metadata records. That ID was absent from the earlier validated feed history.
-The original four assets, masters and membership records stayed unchanged, as did
-the saved baseline. No media was downloaded. This does not prove remote byte
-identity, complete cloud coverage or an atomic removal guard.
-
 Change-feed request starts are at least one second apart. Slow responses count
 toward that interval. HTTP 429/503, CloudKit throttling errors or a server retry
 delay stop the run without another request. The summary reports
@@ -220,10 +200,9 @@ establish completion. Per-run counts and cumulative observation counts are
 separate; neither is a count of unique photos.
 
 The request shape follows Apple's [CloudKit change-feed documentation](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/FetchingRecordZoneChanges%28changeszone%29.html).
-Photos accepted the initial paginated requests. Reaching the end of a feed does not prove
-complete library/resource coverage, an atomic snapshot, completed iPhone uploads
-or protection against changes after the final read. These remain unverified;
-there is no cloud modification or removal command.
+Completion does not prove full coverage, an atomic snapshot, completed iPhone
+uploads or protection against changes after the final read. See
+[recorded observations](#recorded-observations) for the live results.
 
 ## Download two originals
 
@@ -295,35 +274,6 @@ lookup, then stops without a toggle or update. Diagnostics contain only field
 presence, value types and the master-reference match. `metadata_diagnostics_completed`
 means diagnostics were collected; missing values remain unknown.
 
-The first live preflight stopped before any toggle or update because the Favorite
-value or master binding was unknown.
-A read-only diagnostic then confirmed that the master reference matched, while
-`isFavorite` was absent from the lookup's fields. It used one targeted lookup and
-zero updates. Absence remains unknown; it is not interpreted as `false`.
-A second diagnostic after the user favorited the image returned an explicit
-integer Favorite value. The target version changed; other captured metadata and
-membership stayed unchanged. Both diagnostic runs sent zero updates.
-
-In the revised live trial, Favorite was explicitly `1` before and after the manual
-off/on cycle, with different version tags. One `update` carrying the older tag
-and only `isFavorite: 0` was accepted. Three targeted lookups and fresh album
-captures confirmed Favorite became `0`, the target tag changed, and other
-captured album/resource metadata stayed unchanged. No conflict protection was
-established for this request. No media was downloaded or removed.
-
-That trial omitted the Photos wrapper's `remapEnums` and `getCurrentSyncToken`
-flags. A repeat on October 17, 2026 included both as `True` and had the same
-result: one stale-tag update was accepted. Favorite was explicitly `1` at both
-pre-write captures and `0` afterward. The target tag changed; other captured
-membership, relationships and resource metadata stayed unchanged. The repeat
-used three targeted lookups and one update, with no downloads or removals.
-
-An offline integration test compares the helper's prepared query parameters and
-common request body with the real pinned provider's request. The flags are saved
-as `photo_query_flags` in the intent, outcome and summary. These Favorite trials
-do not establish deletion behavior or general concurrency guarantees. No further
-live request is automatic.
-
 For the separately approved write trial:
 
 1. Type `FAVORITE CONFLICT TEST` and authenticate locally.
@@ -339,9 +289,9 @@ For the separately approved write trial:
 
 The protection test requires an exact per-record `CONFLICT` plus unchanged
 Favorite, version tag and other captured metadata afterward. Acceptance,
-unrelated errors, lost replies or failed post-checks are inconclusive. If accepted, Favorite may turn off
-on this one photo. A missing post-check field remains unknown. A timeout never
-causes a write retry.
+unrelated errors, lost replies or failed post-checks are inconclusive. If accepted,
+Favorite may turn off on this one photo. A missing post-check field remains
+unknown. A timeout never causes a write retry.
 
 The helper binds account, full private zone, album, asset and master IDs to the
 saved evidence and baseline hashes. These detect changed inputs, not forged
@@ -361,11 +311,53 @@ their intent to send again. A new trial requires a fresh capture and confirmatio
 Only `stale_update_rejected: true` records the observed conflict result; it does
 not prove deletion behavior, master/resource protection or whole-library safety.
 
+## Recorded observations
+
+Controlled album edits used disposable media; change-feed reads covered the
+approved private zone. These observations leave complete coverage and safe
+automated removal unproved.
+
+- **Initial feed:** Two linked batches completed 113 initial pages with 10,912
+  metadata records and one empty delta page. An earlier run stopped at its
+  10-page cap.
+- **Favorite delta:** One changed asset ID/tag matched the fresh four-item album
+  capture. One delta page also returned three unrelated metadata records.
+  Membership, masters and other requested fields stayed unchanged; Favorite
+  itself was not requested.
+- **Old-dated upload:** A new fifth member, captured January 2, 2001 and added
+  between checkpoints, matched the seven-record delta by full ID/tag. Its ID was
+  absent from earlier history. The original four assets, masters, membership and
+  saved baseline stayed unchanged. No media was downloaded.
+- **Favorite diagnostics:** The first preflight stopped before any toggle/update
+  on unknown Favorite/master metadata. One lookup found a matching master but
+  absent `isFavorite`; a second diagnostic after manual favoriting returned an
+  explicit integer and new tag. Other captured metadata/membership stayed
+  unchanged. Both diagnostics sent zero updates.
+- **Stale Favorite updates:** Two trials each used three lookups and one update.
+  Favorite was explicitly `1` around an off/on cycle with differing tags; an
+  update carrying the older tag and `isFavorite: 0` was accepted. Post-checks
+  confirmed Favorite `0`, a new target tag and unchanged other album/resource
+  metadata. The first trial omitted wrapper flags; the October 17, 2026 repeat
+  set both `remapEnums` and `getCurrentSyncToken` to `True`. Neither trial
+  downloaded or removed media.
+
+Offline integration compares the conflict helper's common query/body with the
+pinned provider request. Flags are recorded as `photo_query_flags`. These findings
+do not establish deletion behavior or general concurrency guarantees.
+
+The separate [one-photo trial](../../docs/cloud-cleanup-trial.md#recorded-result)
+records the soft-delete and manual-restoration result, including remaining gaps.
+
 ## Concurrency decision
 
 The bounded offline review on October 17, 2026 found no additional enforceable
 version condition in the pinned provider. Automated archive cleanup remains
 unavailable; these findings do not authorize deletion.
+
+Source inspection of icloudpd 1.32.3 found that `PhotoAsset.id` identifies a master,
+while removal targets a separate asset record. The removal helper does not inspect
+per-record replies; HTTP success alone is insufficient. Rank-based enumeration
+can miss concurrent changes, and the provider's version map omits some resources.
 
 | Mechanism | Finding |
 | --- | --- |
@@ -379,22 +371,16 @@ Sources: Apple's [modification contract](https://developer.apple.com/library/arc
 and [change checkpoints](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/CloudKitWebServicesReference/FetchingRecordZoneChanges%28changeszone%29.html),
 plus the pinned [removal helper](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/icloudpd/base.py#L808)
 and [Photos wrapper](https://github.com/icloud-photos-downloader/icloud_photos_downloader/blob/879c561240d993d748ddb4546f935090502b16d3/src/pyicloud_ipd/services/photos.py).
-The Apple references describe general CloudKit, not the private Photos endpoint.
+Apple documents conflict rejection for tagged updates in general CloudKit, not
+the private Photos endpoint. Whether resource/master changes invalidate the asset
+tag remains unverified, as do provider checksum meaning, full coverage and account
+compatibility.
 
 An extra preflight read or an upstream allowlist can narrow selection but cannot
 close the interval between the final read and the write. Reopening automation
 research requires a concrete server-enforced condition and separately approved
 evidence for Photos behavior, resource changes and recovery. Manual selection in
 Photos remains a user action; local reports cannot certify it as safe removal.
-
-The separate [one-photo trial](../../docs/cloud-cleanup-trial.md#recorded-result)
-completed on macOS on October 18, 2026 (UTC). One original download matched the
-synthetic source's SHA-256, and one soft-delete update was accepted. The album
-changed from five items to four, then back to five after manual restoration.
-The other items stayed unchanged; restored identity and resource metadata matched.
-Recently Deleted visibility was user-reported. Stale-tag rejection, restored
-remote bytes and reclaimed storage remain unverified. Preparation defaults to
-offline; each live run still needs separate approval.
 
 ## Keep outputs private
 
@@ -405,35 +391,20 @@ Every run creates `.smoke/cloud-probe-<id>`:
 | `summary.json` | Status, counts and findings; the only printed output. |
 | `cookies/` | Sensitive upstream sessions. Never commit or share. |
 | `zones-private.json` | Returned zone identities from discovery. |
-| `album-private.json` | Album/asset/master identities and sanitized passes. |
-| `resource-report-private.json` | Resource ownership and metadata findings. |
-| `album-pass-*-page-*.json` | Partial progress; incomplete until the summary says otherwise. |
+| `album-private.json`, `resource-report-private.json`, `album-pass-*-page-*.json` | Identities, resource findings and partial metadata passes. |
 | `copy-a/`, `copy-b/` | Private downloaded test media, for download scopes only. |
-| `download-plan-private.json`, progress files | Approved bindings and per-file progress. |
-| `download-manifest-private.json` | Completed local copy checks. |
-| `post-download-private.json` | Sanitized final metadata. |
-| `changes-context-private.json` | Account and full zone binding for a change-feed attempt. |
-| `changes-page-*-private.json` | Sanitized change events and tokens, including partial progress. |
-| `changes-private.json` | Final token and phase counts after a completed change-feed capture. |
+| `download-*-private.json`, progress files, `post-download-private.json` | Approved bindings, download/copy checks and final metadata. |
+| `changes-*-private.json`, `changes-private.json` | Account/zone binding, sanitized events, tokens and phase counts. |
 
 Do not upload or commit private reports, media or cookies. macOS run directories
 use mode `0700` and a restrictive umask. Raw responses, signed URLs, wrapping
 keys, exceptions and debug logs are suppressed. Failures retain explicit findings
 and exit nonzero.
 
-Matching passes do not prove an atomic snapshot or complete Personal/Shared/Hidden
-coverage. Missing owner identity stays absent, never invented. macOS results do
-not establish Windows behavior. Removal tests need their own approval; private
-archives are never development fixtures.
-
-The pinned removal helper includes the asset's version tag, but no separate
-master/resource versions or inventory condition. Apple documents conflict
-rejection for that general CloudKit request form; the Photos Favorite trials
-accepted stale tags. Stale-tag rejection for Photos deletion remains unverified.
-Our offline integration test invokes the real helper with synthetic records and
-proves that every probe scope blocks it before transport. See the
-[concurrency findings](../cloud-prototype/README.md#what-remains-unproved) for
-the distinction between documented conditions and the mock's stronger checks.
+macOS results do not establish Windows behavior. Private archives are never
+development fixtures. Offline integration invokes the real pinned removal helper
+with synthetic records and proves every ordinary probe scope blocks it before
+transport. See [concurrency limits](#concurrency-decision) before interpreting results.
 
 ## Offline checks
 
