@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review cloud cleanup · iarchive</title>
+  <link rel="stylesheet" href="/review.css">
+  <script src="/review.js" defer></script>
+</head>
+<body>
+  <header class="masthead"><span class="brand">iarchive<span class="brand-dot">.</span></span><span class="demo-badge">OFFLINE DEMO</span></header>
+  <main>
+    <div class="intro"><p class="eyebrow">CLOUD CLEANUP</p><h1>Choose what to clear.</h1>
+      <p class="lede">Uncheck anything you want to keep in iCloud.<br>Your two local copies stay untouched.</p></div>
+    <p class="demo-note">Synthetic items only. Previews are illustrations, not decoded media. Nothing will be removed from iCloud.</p>
+    __NOTICE__
+    <ol class="steps" aria-label="Review steps"><li><span>1</span> Choose items</li><li><span>2</span> Save selection</li><li><span>3</span> Confirm in Terminal</li></ol>
+    <div class="section-heading"><h2>Items in this album</h2><div class="bulk-actions"><button id="select-all" type="button" disabled>Select all</button><button id="keep-all" type="button" disabled>Keep all</button></div></div>
+    <div id="cards" class="card-grid">__CONTENT__</div>
+    <section class="backups"><h2>Your archive copies</h2><p>All variants stay archived, including items you keep in iCloud.</p><ol id="backups">__BACKUPS__</ol>
+      <details><summary>Demo limits</summary><p>Both folders are on one filesystem. Independent physical drives, real cloud relationships, full coverage, recovery and reclaimed space remain NOT VERIFIED.</p>
+        <p>Keep items unchanged during cleanup. A preflight read cannot prevent a change before removal. This mock deliberately has no atomic version guard.</p></details></section>
+    <section id="next-step" class="next-step" hidden><p class="eyebrow">NEXT STEP</p><h2>Confirm your saved selection.</h2>
+      <p>Copy this confirmation into the waiting Terminal. This runs the simulation only.</p>
+      <div class="copy-row"><input id="confirmation" readonly aria-label="Current saved confirmation"><button id="copy" type="button" disabled>Copy confirmation</button></div>
+      <p id="copy-status" class="helper" role="status"></p></section>
+    <p id="message" class="message" role="status" aria-live="polite"></p>
+  </main>
+  <footer class="action-bar"><div><strong id="selection-summary">Loading review…</strong><span id="save-status" class="helper">Connect using the link printed in Terminal.</span></div><button id="save" class="primary" type="button" disabled>Save selection</button></footer>
+</body>
+</html>

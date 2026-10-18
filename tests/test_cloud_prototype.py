@@ -9,11 +9,13 @@ import unittest
 class OfflineCloudPrototypeTests(unittest.TestCase):
     def test_policy_suite(self):
         root = Path(__file__).resolve().parents[1]
-        result = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", "tools/cloud-prototype", "-v"],
-            cwd=root, capture_output=True, text=True, timeout=60, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for suite in ("cloud-prototype", "cloud-cleanup"):
+            with self.subTest(suite=suite):
+                result = subprocess.run(
+                    [sys.executable, "-m", "unittest", "discover", "-s", f"tools/{suite}", "-v"],
+                    cwd=root, capture_output=True, text=True, timeout=60, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
