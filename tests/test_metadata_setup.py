@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -47,23 +48,39 @@ class MetadataSetupTests(unittest.TestCase):
             root = Path(temporary).resolve()
             exe = "exiftool.exe" if os.name == "nt" else "exiftool"
             tools = root / (".windows-sandbox" if os.name == "nt" else ".tools")
+            payload = (b"synthetic executable" if os.name == "nt" else
+                       b"#!/bin/sh\nprintf '%s\\n' 'synthetic metadata reader'\n")
             data = io.BytesIO()
             if os.name == "nt":
                 with zipfile.ZipFile(data, "w") as stream:
-                    stream.writestr("package/exiftool(-k).exe", b"synthetic executable")
+                    stream.writestr("package/exiftool(-k).exe", payload)
             else:
                 with tarfile.open(fileobj=data, mode="w:gz") as stream:
                     item = tarfile.TarInfo("package/exiftool")
-                    item.size = len(b"synthetic executable")
-                    stream.addfile(item, io.BytesIO(b"synthetic executable"))
+                    item.mode = 0o644  # Setup must set safe executable permissions itself.
+                    item.size = len(payload)
+                    stream.addfile(item, io.BytesIO(payload))
             content = data.getvalue()
             pin = ("https://example.invalid/fixture", hashlib.sha256(content).hexdigest())
             with patch.object(setup, "ROOT", root), patch.dict(setup.DOWNLOADS, {os.name: pin}), \
                     patch.object(setup.urllib.request, "urlopen", return_value=io.BytesIO(content)) as network:
                 setup.setup()
+                installed = tools / "exiftool" / exe
+                if os.name == "posix":
+                    result = subprocess.run([str(installed)], capture_output=True, text=True,
+                                            check=True, timeout=10)
+                    self.assertEqual(result.stdout.strip(), "synthetic metadata reader")
+                    self.assertEqual(installed.stat().st_mode & 0o111, stat.S_IXUSR)
+                    installed.chmod(installed.stat().st_mode & ~0o111)
+                    self.assertFalse(os.access(installed, os.X_OK))
                 setup.setup()
                 self.assertEqual(network.call_count, 1)
-                self.assertEqual((tools / "exiftool" / exe).read_bytes(), b"synthetic executable")
+                self.assertEqual(installed.read_bytes(), payload)
+                if os.name == "posix":
+                    result = subprocess.run([str(installed)], capture_output=True, text=True,
+                                            check=True, timeout=10)
+                    self.assertEqual(result.stdout.strip(), "synthetic metadata reader")
+                    self.assertEqual(installed.stat().st_mode & 0o111, stat.S_IXUSR)
             self.assertEqual(len(list(tools.iterdir())), 1)
             with patch.object(setup, "ROOT", root):
                 (tools / "exiftool/iarchive-version.txt").write_text("wrong")

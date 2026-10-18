@@ -84,6 +84,13 @@ def unpack(archive, unpacked, platform):
                     with package.extractfile(item) as source, destination.open("xb") as out:
                         shutil.copyfileobj(source, out)
 
+
+def enable_execution(path):
+    if os.name == "posix":
+        # Grant owner execution without restoring permissions from the archive.
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
 def setup():
     parent = safe_directory(ROOT / (".windows-sandbox" if os.name == "nt" else ".tools"))
     target = parent / "exiftool"
@@ -92,6 +99,7 @@ def setup():
     if target.exists():
         safe_directory(target)
         if regular_file(exe) and regular_file(marker) and marker.read_text() == VERSION:
+            enable_execution(exe)
             print(f"Metadata reader ready: {exe}")
             return
         raise ValueError("Existing metadata tool directory is incomplete; inspect it before retrying")
@@ -114,6 +122,7 @@ def setup():
         unpack(archive, unpacked, os.name)
         if not regular_file(unpacked / exe.name):
             raise ValueError("Metadata archive has no executable")
+        enable_execution(unpacked / exe.name)
         (unpacked / "iarchive-version.txt").write_text(VERSION)
         unpacked.rename(target)
     print(f"Metadata reader ready: {exe}")
