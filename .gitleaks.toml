@@ -1,0 +1,10 @@
+title = "iarchive secret detection"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "icloud-session-credential"
+description = "iCloud session or trust credential"
+regex = '''(?i)(?:x-apple-(?:webauth-[a-z0-9_-]+|session-token)|dsWebAuthToken|session_token|trust_token)["']?\s*[:=]\s*["']([^\s"']{8,})'''
+secretGroup = 1

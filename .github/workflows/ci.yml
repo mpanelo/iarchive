@@ -3,6 +3,14 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/check_secrets.py setup --no-hook
+      - run: python3 scripts/check_secrets.py check --history-only
   dependencies:
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +69,8 @@ jobs:
         run: ./scripts/windows/test.ps1 -SmokeOnly -ExternalDrives 'C:'
       - if: runner.os != 'Windows'
         run: uv sync --locked --project image-worker --group dev
+      - if: runner.os != 'Windows'
+        run: uv run --locked --project image-worker python scripts/check_secrets.py setup --no-hook
       - if: runner.os != 'Windows'
         run: uv run --locked --project image-worker python scripts/setup_metadata.py
       - if: runner.os != 'Windows'

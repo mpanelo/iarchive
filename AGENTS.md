@@ -66,6 +66,14 @@ Document the commit message convention
 
 ## Checks
 
+Run `uv run --locked --project image-worker python scripts/check_secrets.py setup`
+once per clone to install the pinned local Gitleaks and enable the pre-push hook.
+Before committing or pushing, run
+`uv run --locked --project image-worker python scripts/check_secrets.py check`.
+Never bypass the guard, print matching secrets, or broadly exclude research
+paths from Git-history scans. Keep private artifacts untracked; review any
+synthetic-fixture exceptions narrowly. Preserve existing hooks and signing.
+
 Use rustfmt's standard Rust 2024 style and the Rust API Guidelines for public APIs. Run Clippy with warnings treated as errors; enable stricter lints selectively rather than enabling entire pedantic or restriction groups. See [development tooling](docs/development.md) for setup and editor integration.
 
 Use workspace-local caches when sandboxed:

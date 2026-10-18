@@ -39,6 +39,7 @@ try {
     Invoke-CheckedNative cargo @('deny', '--version')
     Invoke-CheckedNative uv @('sync', '--locked', '--project', 'image-worker', '--group', 'dev', '--python', '3.12')
     Invoke-CheckedNative uv @('run', '--locked', '--project', 'image-worker', 'python', 'scripts/setup_metadata.py')
+    Invoke-CheckedNative uv @('run', '--locked', '--project', 'image-worker', 'python', 'scripts/check_secrets.py', 'setup')
     Invoke-CheckedNative cargo @('build', '--release', '--locked')
     Write-Host 'Setup complete. Run .\scripts\windows\test.ps1 next.'
 } catch {
