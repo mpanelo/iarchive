@@ -387,6 +387,12 @@ research requires a concrete server-enforced condition and separately approved
 evidence for Photos behavior, resource changes and recovery. Manual selection in
 Photos remains a user action; local reports cannot certify it as safe removal.
 
+A separate [one-photo trial](../../docs/cloud-cleanup-trial.md) is now prepared
+with offline tests. It defaults to preserving the upload-evidence-bound synthetic
+JPEG without authentication. Its live mode needs separate approval for one
+original download and one soft-delete request, followed by manual restoration
+and metadata checks. No live deletion result has been established by these tests.
+
 ## Keep outputs private
 
 Every run creates `.smoke/cloud-probe-<id>`:

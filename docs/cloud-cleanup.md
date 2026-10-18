@@ -57,4 +57,7 @@ bindings on both drives, explicit acceptance of this race, and a disposable-item
 trial for deletion, Recently Deleted, recovery and when storage is reclaimed.
 No automatic emptying of Recently Deleted is planned.
 
+The separate [one-photo trial](cloud-cleanup-trial.md) defaults to offline
+preparation. Its live mode needs its own approval.
+
 [Research findings](../tools/cloud-probe/README.md#concurrency-decision)
