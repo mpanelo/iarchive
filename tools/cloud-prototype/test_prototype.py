@@ -236,14 +236,26 @@ class PolicyTests(unittest.TestCase):
 
     def test_plan_seal_round_trip(self):
         plan = self.fixture.plan()
-        path = self.fixture.state / "plan.json"
-        plan.save(path)
-        self.assertEqual(Plan.load(path), plan)
-        data = plan.data()
-        data["count"] += 1
-        path.write_text(canonical({"payload": canonical(data), "sha256": plan.sha256}))
-        with self.assertRaises(Blocked):
-            Plan.load(path)
+        expected = (canonical({"payload": plan.payload, "sha256": plan.sha256}) + "\n").encode("utf-8")
+        fdopen = os.fdopen
+        for index, default_newline in enumerate((None, "\r\n")):
+            # Exercise Windows text-mode translation on every CI platform.
+            def platform_fdopen(*args, **kwargs):
+                if kwargs.get("newline") is None:
+                    kwargs["newline"] = default_newline
+                return fdopen(*args, **kwargs)
+
+            with self.subTest(default_newline=default_newline):
+                path = self.fixture.state / f"plan-{index}.json"
+                with patch("prototype.os.fdopen", side_effect=platform_fdopen):
+                    plan.save(path)
+                self.assertEqual(path.read_bytes(), expected)
+                self.assertEqual(Plan.load(path), plan)
+                data = plan.data()
+                data["count"] += 1
+                path.write_text(canonical({"payload": canonical(data), "sha256": plan.sha256}))
+                with self.assertRaises(Blocked):
+                    Plan.load(path)
 
     def test_confirmation_binds_count_and_digest(self):
         plan = self.fixture.plan()
