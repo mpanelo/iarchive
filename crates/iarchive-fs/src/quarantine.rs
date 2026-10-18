@@ -285,22 +285,6 @@ fn rename_no_replace(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn atomic_moves_preserve_destination_conflicts() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        fs::write(&source, b"source bytes").unwrap();
-        fs::write(&target, b"existing bytes").unwrap();
-        assert!(rename_no_replace(&source, &target).is_err());
-        assert_eq!(fs::read(&source).unwrap(), b"source bytes");
-        assert_eq!(fs::read(&target).unwrap(), b"existing bytes");
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn rename_no_replace(from: &Path, to: &Path) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -340,4 +324,20 @@ fn rename_no_replace(from: &Path, to: &Path) -> Result<()> {
         std::io::Error::last_os_error()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn atomic_moves_preserve_destination_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        fs::write(&source, b"source bytes").unwrap();
+        fs::write(&target, b"existing bytes").unwrap();
+        assert!(rename_no_replace(&source, &target).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"source bytes");
+        assert_eq!(fs::read(&target).unwrap(), b"existing bytes");
+    }
 }
