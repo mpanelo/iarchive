@@ -304,18 +304,53 @@ class PolicyTests(unittest.TestCase):
             self.run_plan(plan)
 
     def test_conditional_operation_rejects_race(self):
-        plan = self.fixture.plan()
-        provider = self.fixture.provider
-        original = provider.simulate_move
+        for change in ("generation", "asset", "master", "resource", "new_upload"):
+            with self.subTest(change=change):
+                self.fixture = Fixture(Path(self.temp.name) / change)
+                plan = self.fixture.plan()
+                provider = self.fixture.provider
+                original = provider.simulate_move
+                attempted = []
 
-        def raced(expected, generation):
-            provider.generation += 1
-            return original(expected, generation)
+                def raced(expected, generation):
+                    # Inject after the fresh snapshot and durable intent, so the
+                    # preflight cannot mask the mock's atomic rejection.
+                    attempted.append(expected.id)
+                    if change == "generation":
+                        provider.generation += 1
+                    elif change == "new_upload":
+                        added = replace(expected, id="new-upload-full-id", captured_at="1990-01-01")
+                        provider.active[added.id] = added
+                        provider.generation += 1
+                    else:
+                        changed = {"asset": replace(expected, asset_tag="changed"),
+                                   "master": replace(expected, master_tag="changed"),
+                                   "resource": replace(expected, resources=(
+                                       replace(expected.resources[0], version="changed"),
+                                       *expected.resources[1:]))}[change]
+                        provider.active[expected.id] = changed
+                        self.assertEqual(provider.generation, generation)
+                        if change != "asset":
+                            self.assertEqual(changed.asset_tag, expected.asset_tag)
+                    return original(expected, generation)
 
-        provider.simulate_move = raced
-        with self.assertRaises(Blocked):
-            self.run_plan(plan)
-        self.assertEqual(provider.calls, [])
+                provider.simulate_move = raced
+                with self.assertRaisesRegex(Blocked, "outcome uncertain") as caught:
+                    self.run_plan(plan)
+                self.assertIsInstance(caught.exception.__cause__, Blocked)
+                self.assertIn("conditional operation rejected changed evidence", str(caught.exception.__cause__))
+                first = self.fixture.assets[0].id
+                self.assertEqual(attempted, [first])
+                self.assertEqual(provider.calls, [])
+                self.assertEqual(provider.recently_deleted, {})
+                self.assertTrue({a.id for a in self.fixture.assets} <= provider.active.keys())
+                if change == "new_upload":
+                    self.assertEqual(provider.active[first], self.fixture.assets[0])
+                    self.assertIn("new-upload-full-id", provider.active)
+                audit = [json.loads(line) for line in
+                         (self.fixture.state / "audit.jsonl").read_text().splitlines()]
+                self.assertEqual([(event["id"], event["status"]) for event in audit],
+                                 [(first, "attempted"), (first, "unknown")])
 
     def test_partial_success_is_audited(self):
         plan = self.fixture.plan()

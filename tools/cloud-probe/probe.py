@@ -269,7 +269,7 @@ def main() -> int:
     parser.add_argument("--album", help="Exact name of the explicitly approved test album")
     parser.add_argument("--reuse-session", help="Authenticated cloud-probe run basename under .smoke")
     parser.add_argument("--baseline", help="Successful album metadata run under .smoke matching the download scope")
-    parser.add_argument("--expected-assets", type=int, choices=(2, 4),
+    parser.add_argument("--expected-assets", type=int, choices=(2, 4, 5),
                         help="Require this album count before metadata enumeration (album scope only)")
     parser.add_argument("--zone-name", help="Exact separately approved private zone name (changes only)")
     parser.add_argument("--zone-owner", help="Exact returned private zone owner (changes only)")

@@ -30,6 +30,7 @@ def pair(suffix="1"):
     asset = {"recordType": "CPLAsset", "recordName": "full-asset-" + suffix, "recordChangeTag": "asset-tag",
              "fields": {"masterRef": {"value": {"recordName": "full-master-" + suffix}},
                         "captionEnc": {"value": "SECRET_CAPTION"}}}
+    asset["fields"].update(assetDate={"value": 978404645000}, addedDate={"value": 1792108800000})
     master = {"recordType": "CPLMaster", "recordName": "full-master-" + suffix,
               "recordChangeTag": "master-tag", "fields": {
                   "resOriginalRes": {"value": {"size": 7, "fileChecksum": "opaque-checksum",
@@ -139,6 +140,10 @@ class AlbumTests(unittest.TestCase):
         self.assertNotIn("SECRET", encoded)
         self.assertNotIn("captionEnc", encoded)
         self.assertEqual(value[0]["recordName"], "full-asset-1")
+        self.assertEqual(value[0]["fields"]["assetDate"], 978404645000)
+        self.assertEqual(value[0]["fields"]["addedDate"], 1792108800000)
+        requested = list_body(ZONE, ALBUM, 0)["desiredKeys"]
+        self.assertTrue({"assetDate", "addedDate"} <= set(requested))
         resource = value[1]["fields"]["resOriginalRes"]
         self.assertEqual(resource, {"size": 7, "fileChecksum": "opaque-checksum", "download_url_present": True})
 
@@ -153,6 +158,9 @@ class AlbumTests(unittest.TestCase):
             examples.append(record)
         examples.append({**pair()[0], "fields": {"masterRef": None}})
         examples.append({**pair()[0], "fields": {"masterRef": {"value": {"recordName": ""}}}})
+        for key in ("assetDate", "addedDate"):
+            for value in (None, True, "978404645000", float("nan"), -62135596800001, 253402300800000):
+                examples.append({**pair()[0], "fields": {key: {"value": value}}})
         for record in examples:
             with self.subTest(record=record), self.assertRaises(AlbumBlocked):
                 safe_record(record)
@@ -210,13 +218,19 @@ class AlbumTests(unittest.TestCase):
         for field in ("inventory_generation_guarantee", "complete_resource_inventory", "content_mapping"):
             self.assertEqual(summary[field], "NOT VERIFIED")
 
-    def test_tag_drift_is_detected(self):
-        second = pass_responses()
-        second[1]["records"][0]["recordChangeTag"] = "changed"
-        responses = [{"records": [album_record()]}] + pass_responses() + second
-        _, summary = collect_album(self.service(responses), ROOT,
-                                   {"private": [{"zone_id": ZONE, "deleted": None}]}, NAME, {})
-        self.assertFalse(summary["two_passes_match"])
+    def test_metadata_drift_is_detected(self):
+        for field in ("recordChangeTag", "assetDate", "addedDate"):
+            second = pass_responses()
+            asset = second[1]["records"][0]
+            if field == "recordChangeTag":
+                asset[field] = "changed"
+            else:
+                asset["fields"][field]["value"] += 1000
+            responses = [{"records": [album_record()]}] + pass_responses() + second
+            with self.subTest(field=field):
+                _, summary = collect_album(self.service(responses), ROOT,
+                                           {"private": [{"zone_id": ZONE, "deleted": None}]}, NAME, {})
+                self.assertFalse(summary["two_passes_match"])
 
     def test_membership_drift_is_detected(self):
         relation = {"recordName": "full-relation", "recordType": "CPLContainerRelation",

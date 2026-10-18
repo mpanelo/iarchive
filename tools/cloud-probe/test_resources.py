@@ -241,8 +241,16 @@ class ResourceTests(unittest.TestCase):
                 safe_record(record)
 
     def test_album_report_round_trip(self):
-        one_pass = [fixtures.count_response(4), {"records": self.records},
-                    {"records": []}, fixtures.count_response(4)]
+        for count in (4, 5):
+            with self.subTest(count=count):
+                self.album_report_round_trip(count)
+
+    def album_report_round_trip(self, count):
+        records = copy.deepcopy(self.records)
+        if count == 5:
+            records.extend(fixtures.pair("new-upload"))
+        one_pass = [fixtures.count_response(count), {"records": records},
+                    {"records": []}, fixtures.count_response(count)]
         responses = [{"records": [fixtures.album_record()]}] + copy.deepcopy(one_pass) + copy.deepcopy(one_pass)
         service = fixtures.AlbumTests().service(responses)
         service.data = {"dsInfo": {"dsid": "synthetic-account"}}
@@ -258,7 +266,7 @@ class ResourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
             run, output = Path(directory), io.StringIO()
             with patch.dict(sys.modules, modules), patch.object(sys, "argv", [
-                    "probe.py", "album", "--album", fixtures.NAME, "--expected-assets", "4"]), \
+                    "probe.py", "album", "--album", fixtures.NAME, "--expected-assets", str(count)]), \
                     patch("probe.version", return_value=probe.PIN), \
                     patch("probe.sys.stdin.isatty", return_value=True), \
                     patch("probe.sys.stderr.isatty", return_value=True), \
@@ -278,12 +286,18 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual(private["zone_id"], fixtures.ZONE)
             self.assertEqual(private["album_id"], fixtures.ALBUM)
             self.assertTrue(private["metadata_passes_match"])
-            self.assertEqual(len(private["resources"]), 12)
+            self.assertEqual(len(private["resources"]), 12 + (count == 5))
+            if count == 5:
+                added = next(asset for asset in baseline["passes"][-1]["assets"]
+                             if asset["recordName"] == "full-asset-new-upload")
+                self.assertEqual(added["fields"]["assetDate"], 978404645000)
+                self.assertEqual(added["fields"]["addedDate"], 1792108800000)
             self.assertNotIn("SECRET", json.dumps(private))
             summary = json.loads((run / "summary.json").read_text())
             self.assertTrue(summary["account_binding_recorded"])
             self.assertNotIn("account_id", summary)
             self.assertTrue(summary["album_metadata_completed"])
+            self.assertEqual(summary["observed_assets"], count)
             self.assertFalse(summary["media_download_requested"])
             self.assertEqual(summary["request_counts"]["original_download_requests"], 0)
             for secret in ("full-asset", "full-master", "SECRET", "synthetic-account", "fake@example.invalid"):

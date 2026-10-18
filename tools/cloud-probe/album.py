@@ -15,7 +15,8 @@ PAGE_SIZE = 100
 PREFIXES = RESOURCE_PREFIXES
 CORE_KEYS = {"recordName", "recordType", "recordChangeTag", "masterRef", "itemType",
              "dataClassType", "isDeleted", "isExpunged", "assetSubtype", "assetSubtypeV2",
-             "adjustmentType", "adjustmentRenderType", "vidComplVisibilityState"}
+             "adjustmentType", "adjustmentRenderType", "vidComplVisibilityState",
+             "assetDate", "addedDate"}
 RESOURCE_KEYS = {prefix + suffix for prefix in PREFIXES
                  for suffix in ("Res", "FileType", "Fingerprint", "Width", "Height")}
 ALBUM_KEYS = {"albumNameEnc", "isDeleted", "recordName", "recordType", "recordChangeTag"}
@@ -180,6 +181,11 @@ def safe_record(record):
                     or not value["recordName"]):
                 raise AlbumBlocked("Asset master reference was invalid")
             value = {"recordName": value["recordName"]}
+        elif key in ("assetDate", "addedDate"):
+            # The pinned provider reads these as Unix milliseconds. Preserve the
+            # raw value; absence stays unknown and must not become an epoch date.
+            if type(value) is not int or not -62135596800000 <= value <= 253402300799999:
+                raise AlbumBlocked("Capture or added timestamp was not valid Unix milliseconds")
         elif key.endswith("Res"):
             if not isinstance(value, dict):
                 raise AlbumBlocked("Resource metadata was not an object")
