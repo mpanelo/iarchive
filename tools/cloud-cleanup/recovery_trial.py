@@ -77,10 +77,12 @@ def media_bytes(repo, path, *, profile):
         after = os.fstat(stream.fileno())
         with os.fdopen(os.open(path, flags), "rb") as current:
             latest = os.fstat(current.fileno())
+        # Windows path and handle timestamps can differ for an unchanged file.
+        # Compare fstat snapshots while retaining the original open handle.
         fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
         if (not stat.S_ISREG(before.st_mode) or not 0 < len(value) <= profile.max_resource
-                or any(getattr(info, key) != getattr(item, key)
-                       for item in (before, after, latest) for key in fields)):
+                or any(getattr(before, key) != getattr(item, key)
+                       for item in (after, latest) for key in fields)):
             raise trial.TrialBlocked("Research media changed during its bounded read")
     return value
 

@@ -376,7 +376,18 @@ class LivePhotoTrialTests(unittest.TestCase):
         path = root / 'original.bin'
         value = b'x' * (live.trial.MAX_ORIGINAL + 1)
         path.write_bytes(value)
-        self.assertEqual(live.media_bytes(self.repo, path, profile=self.profile), value)
+        fstat = live.os.fstat
+        fields = ('st_mode', 'st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        for offset in (0, 100):
+            def handle_stat(descriptor):
+                info = fstat(descriptor)
+                values = {key: getattr(info, key) for key in fields}
+                # Windows path and handle timestamps can have different meanings.
+                values['st_ctime_ns'] += offset
+                return SimpleNamespace(**values)
+
+            with self.subTest(handle_time_offset=offset), patch.object(live.os, 'fstat', side_effect=handle_stat):
+                self.assertEqual(live.media_bytes(self.repo, path, profile=self.profile), value)
         with self.assertRaisesRegex(live.trial.TrialBlocked, 'bounded nonempty'):
             live.trial.original_bytes(self.repo, path)
         path.write_bytes(b'x' * (self.profile.max_resource + 1))
@@ -396,6 +407,32 @@ class LivePhotoTrialTests(unittest.TestCase):
                 link.rmdir()
             else:
                 link.unlink()
+
+    def test_media_rejects_changes_and_replacements(self):
+        path = self.repo / '.smoke/original.bin'
+        content = b'synthetic unchanged media'
+        path.write_bytes(content)
+        self.assertEqual(live.media_bytes(self.repo, path, profile=self.profile), content)
+        fstat = live.os.fstat
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        for changed_call in (2, 3):
+            for changed_field in fields:
+                calls = 0
+
+                def handle_stat(descriptor):
+                    nonlocal calls
+                    calls += 1
+                    info = fstat(descriptor)
+                    values = {key: getattr(info, key) for key in ('st_mode', *fields)}
+                    if calls == changed_call:
+                        values[changed_field] += 1
+                    return SimpleNamespace(**values)
+
+                with self.subTest(snapshot=changed_call, field=changed_field), \
+                        patch.object(live.os, 'fstat', side_effect=handle_stat), \
+                        self.assertRaisesRegex(live.trial.TrialBlocked, 'changed during its bounded read'):
+                    live.media_bytes(self.repo, path, profile=self.profile)
+                self.assertEqual(calls, 3, 'An earlier guard masked the stability check')
 
 
 if __name__ == '__main__':
