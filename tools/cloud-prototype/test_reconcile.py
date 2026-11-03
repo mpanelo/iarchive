@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import reconcile as reconciliation
 from reconcile import Blocked, LIMITS, load_input, main, reconcile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -129,6 +130,7 @@ class ReconcileTests(unittest.TestCase):
             "iarchive.exe" if os.name == "nt" else "iarchive")
         self.assertTrue(exe.is_file(), "Run cargo build --locked -p iarchive first.")
         state, first, second = (self.root / name for name in ("state", "first-reports", "second-reports"))
+        self.exe, self.state, self.first, self.second = exe, state, first, second
         first.mkdir()
         second.mkdir()
 
@@ -142,6 +144,7 @@ class ReconcileTests(unittest.TestCase):
         report = run("replicate", "--cycle", "synthetic", "--secondary", self.root / "copy-b",
                      "--primary-artifacts", first, "--secondary-artifacts", second, "--allow-unverified-devices")
         self.replica, _ = load_input(Path(report["artifact_bundles"][0]) / "manifest.jsonl", jsonl=True)
+        self.initial_report = report
 
     @staticmethod
     def write_json(path, value):
@@ -152,6 +155,158 @@ class ReconcileTests(unittest.TestCase):
 
     def codes(self):
         return {item["code"] for item in self.compare()["findings"]}
+
+    def fresh_args(self, acknowledge=True):
+        return SimpleNamespace(iarchive=self.exe, state_dir=self.state, primary_artifacts=self.first,
+                               secondary_artifacts=self.second, allow_unverified_devices=acknowledge)
+
+    def run_fresh_cli(self):
+        paths = [self.root / name for name in ('observations.json', 'downloads.json', 'replica.jsonl')]
+        self.write_json(paths[0], self.observation)
+        self.write_json(paths[1], self.download)
+        paths[2].write_text(''.join(json.dumps(record) + '\n' for record in self.replica), encoding='utf-8')
+        args = ['reconcile.py', '--resource-report', str(paths[0]), '--download-manifest', str(paths[1]),
+                '--replica-manifest', str(paths[2]), '--verify-local', '--iarchive', str(self.exe),
+                '--state-dir', str(self.state), '--primary-artifacts', str(self.first),
+                '--secondary-artifacts', str(self.second), '--allow-unverified-devices']
+        output = io.StringIO()
+        with patch.object(sys, 'argv', args), redirect_stdout(output):
+            code = main()
+        self.assertNotIn('SECRET_SIGNED_URL', output.getvalue())
+        return code, json.loads(output.getvalue()), paths
+
+    def test_fresh_check_reads_both_copies(self):
+        media = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+                 for folder in ('copy-a', 'copy-b') for p in (self.root / folder).iterdir()}
+        for _ in range(2):
+            code, result, inputs = self.run_fresh_cli()
+            self.assertEqual(code, 0, result)
+            self.assertEqual(result['mode'], 'FRESH_LOCAL_CHECK_WITH_RECORDED_CLOUD_EVIDENCE')
+            self.assertEqual(result['findings'], [])
+            self.assertEqual(result['summary']['matched_resources'], 4)
+            self.assertEqual(result['limits']['fresh_local_bytes'], 'VERIFIED FOR MATCHED RESOURCES')
+            self.assertEqual(result['limits']['physical_drive_independence'], 'NOT VERIFIED')
+            self.assertEqual(result['limits']['cloud_coverage'], 'NOT VERIFIED')
+            self.assertFalse(result['limits']['removal_approved'])
+            self.assertGreater(result['verification']['run_id'], self.replica[0]['run_id'])
+            self.assertEqual(result['input_sha256']['previous_replica_manifest'], hashlib.sha256(inputs[2].read_bytes()).hexdigest())
+            for bundle in result['verification']['artifact_bundles']:
+                manifest = Path(bundle) / 'manifest.jsonl'
+                self.assertEqual(result['input_sha256']['replica_manifest'], hashlib.sha256(manifest.read_bytes()).hexdigest())
+        self.assertEqual(media, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in media})
+        with self.assertRaisesRegex(Blocked, 'Deep verification failed'):
+            reconciliation.fresh_replica(self.fresh_args(acknowledge=False), self.replica)
+
+    def test_fresh_check_rejects_local_drift(self):
+        for side in ('copy-a', 'copy-b'):
+            root = self.root / side
+            path = next(root.iterdir())
+            content, stamp = path.read_bytes(), path.stat()
+            for case in ('bytes', 'missing', 'extra', 'identity'):
+                extra, moved = root / 'unexpected.jpg', self.root / (side + '-old')
+                try:
+                    if case == 'bytes':
+                        path.write_bytes(b'x' * len(content))
+                        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    elif case == 'missing':
+                        path.unlink()
+                    elif case == 'extra':
+                        extra.write_bytes(b'invented extra')
+                    else:
+                        root.rename(moved)
+                        root.mkdir()
+                        for source in moved.iterdir():
+                            target = root / source.name
+                            target.write_bytes(source.read_bytes())
+                            os.utime(target, ns=(source.stat().st_atime_ns, source.stat().st_mtime_ns))
+                    with self.subTest(side=side, case=case), self.assertRaisesRegex(Blocked, 'Deep verification failed'):
+                        reconciliation.fresh_replica(self.fresh_args(), self.replica)
+                    if case == 'bytes':
+                        self.assertEqual(path.read_bytes(), b'x' * len(content), 'Verification must not repair media')
+                finally:
+                    if case == 'identity':
+                        for target in root.iterdir():
+                            target.unlink()
+                        root.rmdir()
+                        moved.rename(root)
+                    extra.unlink(missing_ok=True)
+                    if case in ('bytes', 'missing'):
+                        path.write_bytes(content)
+                        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+
+    def test_verifier_outputs_must_be_fresh(self):
+        execute = subprocess.run
+        cases = {'state': 'State source scope', 'replay': 'new verification run', 'cycle': 'verification scope',
+                 'root': 'verification scope', 'counters': 'verification completion',
+                 'topology': 'physical topology', 'bundle': 'fresh artifact directory',
+                 'manifest': 'manifest digest'}
+        for case, finding in cases.items():
+            def mutate(*args, **kwargs):
+                result = execute(*args, **kwargs)
+                self.assertEqual(result.returncode, 0)
+                if 'verify' not in args[0] and case != 'state':
+                    return result
+                stream = kwargs['stdout']
+                stream.seek(0)
+                value = json.loads(stream.read())
+                if case == 'state':
+                    value['source'] = str(self.root / 'copy-b')
+                elif case == 'replay':
+                    value['run_id'] = self.replica[0]['run_id']
+                elif case == 'cycle':
+                    value['cycle'] = 'wrong-cycle'
+                elif case == 'root':
+                    value['secondary_root'] = str(self.root / 'copy-a')
+                elif case == 'counters':
+                    value['verified_files'] -= 1
+                elif case == 'topology':
+                    value['independent_physical_drives'] = 'VERIFIED BY OS TOPOLOGY'
+                elif case == 'bundle':
+                    value['artifact_bundles'][0] = str(self.root / 'copy-a')
+                else:
+                    (Path(value['artifact_bundles'][0]) / 'manifest.jsonl').write_text('{}\n', encoding='utf-8')
+                stream.seek(0)
+                stream.write(json.dumps(value).encode())
+                stream.truncate()
+                return result
+            with self.subTest(case=case), patch.object(subprocess, 'run', side_effect=mutate), \
+                    self.assertRaisesRegex(Blocked, finding):
+                reconciliation.fresh_replica(self.fresh_args(), self.replica)
+
+    def test_inputs_cannot_change_during_verification(self):
+        execute = subprocess.run
+        for name in ('observations.json', 'downloads.json', 'replica.jsonl'):
+            def mutate(*args, **kwargs):
+                result = execute(*args, **kwargs)
+                if 'verify' in args[0]:
+                    (self.root / name).write_text('{}', encoding='utf-8')
+                return result
+            with self.subTest(input=name), patch.object(subprocess, 'run', side_effect=mutate) as called:
+                code, result, _ = self.run_fresh_cli()
+                self.assertEqual(code, 1)
+                self.assertEqual(called.call_count, 2, 'Preview and verification must precede this mutation')
+                self.assertEqual(result['limits'], LIMITS)
+                self.assertNotIn('matches', result)
+
+    def test_findings_prevent_local_verification(self):
+        self.observation['metadata_passes_match'] = False
+        with patch.object(subprocess, 'run') as execute:
+            code, result, _ = self.run_fresh_cli()
+        self.assertEqual(code, 2)
+        execute.assert_not_called()
+        self.assertIn('observation_metadata_unstable', {f['code'] for f in result['findings']})
+        self.assertFalse(result['verification']['attempted'])
+        self.assertEqual(result['limits'], LIMITS)
+
+    def test_topology_needs_distinct_physical_disks(self):
+        first = {'volume_id': 'volume-a', 'root_id': 'root-a', 'physical_disks': [1]}
+        for disks, volume, expected in (([2], 'volume-b', True), ([1, 2], 'volume-b', False),
+                                         ([], 'volume-b', False), (None, 'volume-b', False),
+                                         ([2], 'volume-a', False), ([False], 'volume-b', False),
+                                         ([-1], 'volume-b', False)):
+            with self.subTest(disks=disks, volume=volume):
+                self.assertEqual(reconciliation.independent(first, {**first, 'volume_id': volume,
+                                 'root_id': 'root-b', 'physical_disks': disks}), expected)
 
     def test_records_match_without_media(self):
         for item in self.download["resources"]:

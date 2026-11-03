@@ -87,6 +87,30 @@ input. Even a match leaves fresh local checks, physical independence, cloud
 coverage, content relationships and removal approval unverified. Input digests
 identify the compared bytes; they do not authenticate the reports.
 
+### Verify current copies
+
+Use matching evidence, the existing cycle's state directory and its artifact
+directories. For example, on Windows:
+
+```sh
+python tools/cloud-prototype/reconcile.py --resource-report resource-report-private.json --download-manifest download-manifest-private.json --replica-manifest manifest.jsonl --verify-local --iarchive ./target/release/iarchive.exe --state-dir ./state --primary-artifacts D:/PhotoArchive/artifacts --secondary-artifacts E:/PhotoArchive/artifacts
+```
+
+On macOS, use `python3` and the executable without `.exe`. Supply your actual
+state and artifact paths. For a same-disk test, add `--allow-unverified-devices`;
+this acknowledges byte-only verification and never proves separate drives.
+
+This runs `iarchive verify --deep`, updates local state and publishes new bundles
+outside media on both drives. It never copies, repairs or removes media. Only
+the new manifest is reconciled; failed checks never reuse an old success.
+Changed inputs or drive identities stop the check. Run one writer at a time.
+
+`fresh_local_bytes` verifies matched resources at that check.
+`physical_drive_independence` requires fresh OS topology, available on Windows.
+Cloud evidence remains recorded only; coverage and removal approval stay
+unverified. Files can change after verification. Exit 1 also covers failed or
+interrupted local verification. Keep the JSON output private.
+
 ## What remains unproved
 
 **Passing this mock does not establish safe iCloud removal.** Its inventories,

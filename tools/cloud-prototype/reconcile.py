@@ -1,7 +1,7 @@
 """Compare saved cloud observations and download provenance with a raw replica manifest.
 
-No network, authentication, media reads, writes, or executable cloud plans.
-All hashes below are recorded observations, never fresh byte verification.
+Default: reports only. Optional local verification invokes iarchive verify --deep
+and publishes verification bundles. No authentication, network or cloud plans.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
+import tempfile
 import unicodedata
 
 from prototype import Blocked, canonical, safe_path
@@ -34,6 +36,7 @@ LIMITS = {
     "content_relationships": "NOT VERIFIED",
     "removal_approved": False,
 }
+FRESH_MODE = "FRESH_LOCAL_CHECK_WITH_RECORDED_CLOUD_EVIDENCE"
 
 
 def object_value(value):
@@ -325,9 +328,16 @@ def load_input(path, jsonl=False):
         raise Blocked("Evidence input must be a regular file")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     with os.fdopen(os.open(path, flags), "rb") as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
             raise Blocked("Evidence input must be a regular file")
         raw = stream.read(MAX_INPUT_BYTES + 1)
+        after = os.fstat(stream.fileno())
+        with os.fdopen(os.open(safe_path(path), flags), "rb") as current:
+            latest = os.fstat(current.fileno())
+        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        if any(getattr(before, key) != getattr(item, key) for item in (after, latest) for key in fields):
+            raise Blocked("Evidence input changed during reading")
     if len(raw) > MAX_INPUT_BYTES:
         raise Blocked("Evidence input exceeds the bounded research limit")
     text = raw.decode("utf-8")
@@ -342,6 +352,107 @@ def load_input(path, jsonl=False):
     return value, hashlib.sha256(raw).hexdigest()
 
 
+def independent(first, second):
+    """Only fresh OS topology can establish separate physical disks."""
+    def disks(value):
+        items = value.get('physical_disks')
+        return (isinstance(items, list) and bool(items)
+                and all(type(item) is int and item >= 0 for item in items)
+                and len(items) == len(set(items)))
+    return (first['volume_id'] != second['volume_id'] and disks(first) and disks(second)
+            and set(first['physical_disks']).isdisjoint(second['physical_disks']))
+
+
+def command_report(command, action):
+    # Spool output so even a failing large inventory cannot exhaust memory.
+    with tempfile.TemporaryFile() as output:
+        completed = subprocess.run(command, stdout=output, stderr=subprocess.DEVNULL, check=False)
+        if completed.returncode != 0:
+            raise Blocked(f"{action} failed; no saved manifest fallback")
+        output.seek(0)
+        raw = output.read(MAX_INPUT_BYTES + 1)
+    if len(raw) > MAX_INPUT_BYTES:
+        raise Blocked(f"{action} output exceeded its bound")
+    return object_value(json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant)), hashlib.sha256(raw).hexdigest()
+
+
+def fresh_replica(args, previous):
+    """Run the existing local verifier; never reuse a saved success on failure."""
+    header = previous[0]
+    executable = safe_path(args.iarchive)
+    if not executable.is_file():
+        raise Blocked("The iarchive executable is unavailable")
+    state, first, second = [safe_path(path) for path in
+                            (args.state_dir, args.primary_artifacts, args.secondary_artifacts)]
+    safe_path(state / 'manifest.sqlite')
+    roots = [safe_path(Path(identity(header.get(key)))) for key in ('source_root', 'secondary_root')]
+    # Check state selection without reading media from a different imported cycle.
+    preview, _ = command_report([str(executable), '--json', '--dry-run', '--state-dir', str(state),
+                                 'status', '--cycle', header['archive_id']], 'State preview')
+    if (preview.get('dry_run') is not True or preview.get('will_write_media') is not False
+            or preview.get('cycle') != header['archive_id']
+            or not os.path.samefile(safe_path(Path(identity(preview.get('source')))), roots[0])):
+        raise Blocked("State source scope does not match the supplied replica")
+    parents = [safe_path(state / 'replica'), first, second]
+    existing = []
+    for parent in parents:
+        names = set()
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                names.add(path_key(entry.name))
+                if len(names) > MAX_RECORDS:
+                    raise Blocked("Too many previous artifact directories")
+        existing.append(names)
+    command = [str(executable), '--json', '--state-dir', str(state), 'verify', '--deep',
+               '--cycle', header['archive_id'], '--secondary', str(roots[1]),
+               '--primary-artifacts', str(first), '--secondary-artifacts', str(second)]
+    if args.allow_unverified_devices:
+        command.append('--allow-unverified-devices')
+    report, output_hash = command_report(command, 'Deep verification')
+    if not positive(report.get('run_id')) or report['run_id'] <= header['run_id']:
+        raise Blocked("A new verification run is required")
+    if (type(report.get('schema_version')) is not int or report['schema_version'] != 1
+            or report.get('operation') != 'verify' or report.get('cycle') != header['archive_id']
+            or any(report.get(key) != header[key] for key in ('source_identity', 'secondary_identity'))
+            or any(not os.path.samefile(safe_path(Path(identity(report.get(key)))), root)
+                   for key, root in zip(('source_root', 'secondary_root'), roots, strict=True))):
+        raise Blocked("Deep verification scope does not match the supplied replica")
+    count = len(previous) - 1
+    counters = {'planned_files': count, 'verified_files': count, 'copied_files': 0,
+                'missing_files': 0, 'extra_files': 0, 'hash_mismatches': 0, 'file_errors': 0}
+    if (report.get('complete') is not True or report.get('dry_run') is not False
+            or report.get('local_replica') != 'LOCAL BYTES VERIFIED' or report.get('issues') != []
+            or any(type(report.get(key)) is not int or report[key] != value for key, value in counters.items())):
+        raise Blocked("Deep verification completion is inconsistent")
+    physical = independent(report['source_identity'], report['secondary_identity'])
+    physical_status = 'VERIFIED BY OS TOPOLOGY' if physical else 'NOT VERIFIED'
+    if report.get('independent_physical_drives') != physical_status or (not physical and not args.allow_unverified_devices):
+        raise Blocked("Deep verification physical topology is inconsistent")
+    bundles = report.get('artifact_bundles')
+    if not isinstance(bundles, list) or len(bundles) != 3:
+        raise Blocked("Three fresh artifact directories are required")
+    expected_hash = sha256(report.get('manifest_sha256'))
+    fresh = None
+    for bundle, parent, names in zip(bundles, parents, existing, strict=True):
+        path = safe_path(Path(identity(bundle)))
+        if not path.is_dir() or not os.path.samefile(path.parent, parent) or path_key(path.name) in names:
+            raise Blocked("A fresh artifact directory is required")
+        value, digest = load_input(path / 'manifest.jsonl', jsonl=True)
+        if digest != expected_hash:
+            raise Blocked("Fresh manifest digest differs from verification")
+        if fresh is None:
+            fresh = value
+    current = object_value(fresh[0])
+    if (current.get('run_id') != report['run_id'] or current.get('archive_id') != report['cycle']
+            or any(current.get(key) != report[key] for key in ('source_identity', 'secondary_identity', 'independent_physical_drives'))
+            or any(not os.path.samefile(safe_path(Path(identity(current.get(key)))), root)
+                   for key, root in zip(('source_root', 'secondary_root'), roots, strict=True))):
+        raise Blocked("Fresh manifest verification scope changed")
+    return fresh, expected_hash, {'run_id': report['run_id'], 'artifact_bundles': bundles,
+                                  'independent_physical_drives': physical_status,
+                                  'verifier_output_sha256': output_hash}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resource-report", type=Path, required=True)
@@ -349,18 +460,48 @@ def main():
     parser.add_argument("--replica-manifest", type=Path, required=True)
     parser.add_argument("--primary-prefix", default="copy-a")
     parser.add_argument("--secondary-prefix", default="copy-b")
+    parser.add_argument('--verify-local', action='store_true', help='Run iarchive verify --deep before reconciling')
+    parser.add_argument('--iarchive', type=Path, help='Built iarchive executable for local verification')
+    parser.add_argument('--state-dir', type=Path, help='Existing state directory for this replica cycle')
+    parser.add_argument('--primary-artifacts', type=Path)
+    parser.add_argument('--secondary-artifacts', type=Path)
+    parser.add_argument('--allow-unverified-devices', action='store_true', help='Acknowledge byte-only verification')
     args = parser.parse_args()
     try:
+        options = (args.iarchive, args.state_dir, args.primary_artifacts, args.secondary_artifacts)
+        if ((args.verify_local and any(option is None for option in options))
+                or (not args.verify_local and (any(option is not None for option in options) or args.allow_unverified_devices))):
+            raise Blocked("Local verification options require --verify-local and all four paths")
         observation, report_hash = load_input(args.resource_report)
         download, download_hash = load_input(args.download_manifest)
         replica, replica_hash = load_input(args.replica_manifest, jsonl=True)
         result = reconcile(observation, download, replica, args.primary_prefix, args.secondary_prefix)
         result["input_sha256"] = {"resource_report": report_hash, "download_manifest": download_hash,
                                  "replica_manifest": replica_hash}
-    except (Blocked, OSError, ValueError, TypeError, KeyError, RecursionError):
+        if args.verify_local:
+            result['mode'] = FRESH_MODE
+            result['verification'] = {'attempted': False, 'reason': 'RECORDED EVIDENCE HAS FINDINGS'}
+            if not result['findings']:
+                fresh, fresh_hash, verification = fresh_replica(args, replica)
+                # The child may run for hours. Recheck all inputs before accepting its snapshot.
+                for path, expected, jsonl in ((args.resource_report, report_hash, False),
+                                              (args.download_manifest, download_hash, False),
+                                              (args.replica_manifest, replica_hash, True)):
+                    if load_input(path, jsonl=jsonl)[1] != expected:
+                        raise Blocked("Reconciliation input changed during verification")
+                result = reconcile(observation, download, fresh, args.primary_prefix, args.secondary_prefix)
+                result.update(mode=FRESH_MODE, verification={'attempted': True, **verification},
+                              input_sha256={'resource_report': report_hash, 'download_manifest': download_hash,
+                                            'previous_replica_manifest': replica_hash, 'replica_manifest': fresh_hash})
+                if not result['findings']:
+                    result['limits']['fresh_local_bytes'] = 'VERIFIED FOR MATCHED RESOURCES'
+                    result['limits']['physical_drive_independence'] = verification['independent_physical_drives']
+            result['note'] = ('Local verification is a byte snapshot, not approval for a later operation. '
+                              'Cloud evidence is recorded only; no provider was read and removal remains unavailable.')
+    except (Blocked, OSError, ValueError, TypeError, KeyError, RecursionError, KeyboardInterrupt):
         # Do not echo raw reports, paths, URLs, credentials, or parser exceptions.
-        print(json.dumps({"schema": 1, "mode": "RECORDED_EVIDENCE_ONLY",
-                          "error": "Malformed, unsafe or unavailable evidence input", "limits": LIMITS}))
+        print(json.dumps({"schema": 1, "mode": FRESH_MODE if args.verify_local else "RECORDED_EVIDENCE_ONLY",
+                          "error": "Evidence or local verification failed; no saved success was reused", "limits": LIMITS}))
         return 1
     print(json.dumps(result, sort_keys=True, ensure_ascii=True))
     return 2 if result["findings"] else 0
