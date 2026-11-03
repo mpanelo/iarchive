@@ -81,30 +81,37 @@ changed evidence stop the check without retries. No cloud modifications are allo
 Require `restored_original_sha256_verified: true` in the new summary. That result
 covers this JPEG only; the original trial and other verification limits stay unchanged.
 
-## Live Photo and video trials
+## Live Photo, video and edited-photo trials
 
 Prepare from a completed five-item metadata baseline and the earlier resource
-download run. Both saved original copies must still match their hashes:
+download run. Both saved copies of each selected file must match their hashes:
 
 ```sh
 uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/live_photo_trial.py --baseline cloud-probe-baseline --downloads cloud-probe-downloads --album 'Synthetic test album'
 uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/video_trial.py --baseline cloud-probe-baseline --downloads cloud-probe-downloads --album 'Synthetic test album'
+uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/edited_photo_trial.py --baseline cloud-probe-baseline --downloads cloud-probe-downloads --album 'Synthetic test album'
 ```
 
-Choose one command. Preparation stays offline and preserves the selected originals.
-Missing, ambiguous, edited or additional original resources block it.
+Choose one command. Preparation stays offline and preserves the selected files.
+Missing, ambiguous or additional original resources block it. Live Photo and
+video trials reject edits. The edited-photo trial requires one Apple Photos edit:
+a HEIC original on its master record and a HEIC full rendition on its asset
+record. The field named `resJPEGFullRes` does not guarantee JPEG bytes.
 
 After separate live approval, add `--live` and follow the Terminal prompts.
-The helper downloads the originals and checks their saved hashes before offering
+The helper downloads the selected files and checks their saved hashes before offering
 one exact removal confirmation. Removal confirmation expires after two minutes.
 After removal, confirm Recently Deleted, restore that item manually, then check
-playback (and video audio, if present). Restored originals are downloaded and
-compared separately; playback is recorded as **USER REPORTED**.
+playback (and video audio, if present) or confirm that the intended crop remains.
+Restored files are downloaded and compared separately. Playback and crop
+confirmation are recorded as **USER REPORTED**; matching bytes alone do not
+prove the intended appearance.
 
-| Trial | Originals | Media GETs total | Limit per GET |
+| Trial | Preserved files | Media GETs total | Limit per GET |
 | --- | --- | --- | --- |
 | Live Photo | HEIC still and MOV motion | 4 | 4 MiB |
 | Video | MOV original | 2 | 8 MiB |
+| Edited photo | HEIC original and edited HEIC rendition | 4 | 4 MiB |
 
 Each trial allows three asset/master lookups and one soft-delete request.
 Requests start at least one second apart; media streams
@@ -113,6 +120,8 @@ changed evidence or uncertain outcomes stop the trial. Writes are never retried;
 lost replies require exact metadata reconciliation before continuing.
 No purge or automatic restore is available. Both local copies remain on one
 filesystem; archive cleanup and physical backup independence stay unverified.
+The edited-photo helper checks saved versions, not edit-recipe completeness or
+the ability to recreate the crop from the original outside Photos.
 
 ## Recorded result
 
@@ -161,7 +170,18 @@ Recently Deleted visibility and restored playback were user-reported. An
 independent offline check verified the plan/intent, input digests, album records
 and original hashes.
 
-Restored bytes are verified for the tested JPEG, Live Photo and video only. Concurrency
+### Edited photo
+
+One approved macOS trial completed on November 3, 2026 (UTC): one accepted
+soft-delete, three asset/master lookups and four media GETs. The album changed
+**5 → 4 → 5** after manual restoration; the other four items stayed unchanged.
+The restored 2,936,739-byte HEIC original and 457,385-byte edited HEIC rendition
+each matched their preserved SHA-256 hashes. The original was bound to its master
+record and the rendition to its asset record. Recently Deleted visibility and
+the restored crop were user-reported. An independent offline check verified the
+plan/intent, input digests, owner bindings, album records and both file hashes.
+
+Restored bytes are verified for the tested JPEG, Live Photo, video and edited photo only. Concurrency
 protection, complete cloud/resource coverage, relationship ownership, independent
 physical backups and reclaimed space remain **NOT VERIFIED**. These results do
 not enable archive cleanup.

@@ -32,6 +32,7 @@ class RecoveryProfile:
     label: str
     max_resource: int
     resources: tuple[tuple[str, tuple[str, str, str]], ...]
+    asset_resources: tuple[str, ...] = ()
 
     @property
     def scope_phrase(self):
@@ -45,12 +46,19 @@ class RecoveryProfile:
     def resource_map(self):
         return dict(self.resources)
 
+    def owner(self, field):
+        return "asset" if field in self.asset_resources else "master"
+
 
 LIVE_PHOTO = RecoveryProfile("live_photo", "Live Photo", 4 * 1024 * 1024, (
     ("resOriginalRes", ("still.heic", "public.heic", "image/heic")),
     ("resOriginalVidComplRes", ("motion.mov", "com.apple.quicktime-movie", "video/quicktime"))))
 VIDEO = RecoveryProfile("video", "video", 8 * 1024 * 1024, (
     ("resOriginalRes", ("original.mov", "com.apple.quicktime-movie", "video/quicktime")),))
+EDITED_PHOTO = RecoveryProfile("edited_photo", "edited photo", 4 * 1024 * 1024, (
+    ("resOriginalRes", ("original.heic", "public.heic", "image/heic")),
+    ("resJPEGFullRes", ("edited.heic", "public.heic", "image/heic"))), ("resJPEGFullRes",))
+PROFILES = (LIVE_PHOTO, VIDEO, EDITED_PHOTO)
 
 
 def run_name(value):
@@ -102,7 +110,9 @@ def validate_pair(pair, binding, *, profile):
                 or (purged is not None and (type(purged) is not int or purged != 0))):
             raise trial.TrialBlocked("Original deletion metadata is ambiguous or purged")
         adjustment = fields.get("adjustmentType")
-        if ((adjustment is not None and (type(adjustment) is not int or adjustment != 0))
+        adjustment_valid = (adjustment == "com.apple.photo" if profile == EDITED_PHOTO and key == "asset"
+                            else adjustment is None or (type(adjustment) is int and adjustment == 0))
+        if (not adjustment_valid
                 or any(k in fields for k in ({"resOriginalAltRes", "resSidecarRes", "resJPEGFullRes", "resVidFullRes",
                                                "resOriginalVidComplRes"} - profile.resource_map.keys()))
                 or any(k.startswith("res") and k.endswith("Res") and k not in RESOURCE_ROLES for k in fields)):
@@ -110,19 +120,27 @@ def validate_pair(pair, binding, *, profile):
     if pair["asset"]["fields"].get("masterRef") != {"recordName": binding["master_id"]}:
         raise trial.TrialBlocked("Original master reference changed")
     for field, (_, file_type, _) in profile.resources:
-        value = pair["master"]["fields"].get(field)
-        if (field in pair["asset"]["fields"] or not isinstance(value, dict)
+        owner = profile.owner(field)
+        other = "asset" if owner == "master" else "master"
+        record = pair[owner]
+        value = record["fields"].get(field)
+        if (field in pair[other]["fields"] or not isinstance(value, dict)
                 or type(value.get("size")) is not int or not 0 < value["size"] <= profile.max_resource
                 or not text(value.get("fileChecksum")) or value.get("download_url_present") is not True
-                or pair["master"]["fields"].get(field.removesuffix("Res") + "FileType") != file_type):
+                or record["fields"].get(field.removesuffix("Res") + "FileType") != file_type):
             raise trial.TrialBlocked("Exact original resources for the approved profile are required")
         if "resources" in binding:
             expected = binding["resources"][field]
             if value["size"] != expected["size"] or value["fileChecksum"] != expected["checksum"]:
                 raise trial.TrialBlocked("Original resource metadata changed")
+            if (expected.get("owner") != owner or expected.get("record_id") != record["recordName"]
+                    or expected.get("record_type") != record["recordType"]):
+                raise trial.TrialBlocked("Bound resource ownership changed")
 
 
 def prepare(repo, baseline_name, downloads_name, run, *, profile):
+    if profile not in PROFILES:
+        raise trial.TrialBlocked("Unsupported recovery profile")
     baseline_dir = repo / ".smoke" / run_name(baseline_name)
     downloads = repo / ".smoke" / run_name(downloads_name)
     inputs = {}
@@ -134,12 +152,15 @@ def prepare(repo, baseline_name, downloads_name, run, *, profile):
     scopes = {"album": ("album-private.json", "album_metadata_completed"),
               "restored_jpeg_byte_check": ("after-album-private.json", "restored_original_sha256_verified"),
               "one_disposable_live_photo_trial": ("final-album-private.json", "restored_originals_sha256_verified"),
-              "one_disposable_video_trial": ("final-album-private.json", "restored_originals_sha256_verified")}
+              "one_disposable_video_trial": ("final-album-private.json", "restored_originals_sha256_verified"),
+              "one_disposable_edited_photo_trial": ("final-album-private.json", "restored_originals_sha256_verified")}
     if status.get("scope") not in scopes:
         raise trial.TrialBlocked("A completed five-item metadata baseline is required")
     filename, completed = scopes[status["scope"]]
     if (status.get("schema") != 1 or status.get("provider_version") != PIN
-            or status.get("phase") != "completed" or "blocked" in status or status.get(completed) is not True):
+            or status.get("phase") != "completed" or "blocked" in status or status.get(completed) is not True
+            or (status["scope"] == "one_disposable_edited_photo_trial"
+                and status.get("restored_edited_rendition_sha256_verified") is not True)):
         raise trial.TrialBlocked("A completed five-item metadata baseline is required")
     baseline = read(baseline_dir / filename)
     if (not text(baseline.get("account_id")) or not valid_zone(baseline.get("zone_id"))
@@ -154,7 +175,12 @@ def prepare(repo, baseline_name, downloads_name, run, *, profile):
         masters = [m for m in baseline["passes"][-1]["masters"]
                    if m["fields"].get("resOriginalFileType") == "com.apple.quicktime-movie"]
     else:
-        raise trial.TrialBlocked("Unsupported recovery profile")
+        candidates = [a for a in baseline["passes"][-1]["assets"]
+                      if "resJPEGFullRes" in a["fields"] or a["fields"].get("adjustmentType") == "com.apple.photo"]
+        if len(candidates) != 1:
+            raise trial.TrialBlocked("Exactly one edited photo asset is required")
+        reference = candidates[0]["fields"].get("masterRef")
+        masters = [m for m in baseline["passes"][-1]["masters"] if reference == {"recordName": m["recordName"]}]
     if len(masters) != 1:
         raise trial.TrialBlocked(f"Exactly one {profile.label} master is required")
     assets = [a for a in baseline["passes"][-1]["assets"]
@@ -180,10 +206,12 @@ def prepare(repo, baseline_name, downloads_name, run, *, profile):
                    if item.get("asset_id") == binding["asset_id"] and item.get("resource_field") == field]
         if len(matches) != 1:
             raise trial.TrialBlocked("Saved original resource mapping is missing or ambiguous")
-        item, metadata = matches[0], pair["master"]["fields"][field]
+        owner = profile.owner(field)
+        record = pair[owner]
+        item, metadata = matches[0], record["fields"][field]
         if (any(canonical(item.get(key)) != canonical(binding[key])
                 for key in ("account_id", "database", "zone_id", "album_id", "master_id"))
-                or item.get("resource_record_id") != binding["master_id"] or item.get("resource_record_type") != "CPLMaster"
+                or item.get("resource_record_id") != record["recordName"] or item.get("resource_record_type") != record["recordType"]
                 or item.get("resource_file_type") != file_type or item.get("resource_size") != metadata["size"]
                 or item.get("downloaded_bytes") != metadata["size"] or item.get("provider_checksum_opaque") != metadata["fileChecksum"]
                 or item.get("copy_verified") is not True or item.get("download_complete") is not True
@@ -199,7 +227,8 @@ def prepare(repo, baseline_name, downloads_name, run, *, profile):
             sources.append((downloads / relative).relative_to(repo).as_posix())
         paths.extend(sources)
         binding["resources"][field] = {"size": metadata["size"], "checksum": metadata["fileChecksum"],
-                                       "sha256": item["response_sha256"], "sources": sources}
+                                       "sha256": item["response_sha256"], "sources": sources,
+                                       "owner": owner, "record_id": record["recordName"], "record_type": record["recordType"]}
     if len(set(paths)) != 2 * len(profile.resources):
         raise trial.TrialBlocked("Saved original copies must use distinct paths")
     verify_preserved(repo, binding, inputs, run, profile=profile)
@@ -233,7 +262,7 @@ class RecoveryWire(Exchange):
 
     def __init__(self, *args, profile):
         super().__init__(*args)
-        if profile not in (LIVE_PHOTO, VIDEO) or self.binding.get("trial_profile") != profile.key:
+        if profile not in PROFILES or self.binding.get("trial_profile") != profile.key:
             raise trial.TrialBlocked("Recovery profile does not match the bound trial")
         self.profile = profile
         self.downloads = set()
@@ -255,7 +284,8 @@ class RecoveryWire(Exchange):
             indexed[record["recordName"]] = record
         pair = {key: safe_record(indexed[self.binding[key + "_id"]]) for key in ("asset", "master")}
         validate_pair(pair, self.binding, profile=self.profile)
-        urls = {field: indexed[self.binding["master_id"]]["fields"][field]["value"].get("downloadURL") for field, _ in self.profile.resources}
+        urls = {field: indexed[self.binding[self.profile.owner(field) + "_id"]]["fields"][field]["value"].get("downloadURL")
+                for field, _ in self.profile.resources}
         return pair, urls
 
     def freeze_removal(self, pair):
@@ -282,7 +312,7 @@ class RecoveryWire(Exchange):
 def download_resources(wire, urls, run, stage):
     from requests import Request, Session
     profile = wire.profile
-    if profile not in (LIVE_PHOTO, VIDEO) or wire.binding.get("trial_profile") != profile.key:
+    if profile not in PROFILES or wire.binding.get("trial_profile") != profile.key:
         raise trial.TrialBlocked("Recovery profile does not match the bound trial")
     if stage not in ("before", "restored") or wire.writes != int(stage == "restored") or set(urls) != set(profile.resource_map):
         raise trial.TrialBlocked("Original downloads are outside the approved trial stage")
@@ -410,6 +440,12 @@ def run_trial(repo, service, root, zones, name, binding, baseline, inputs, run, 
              "restored_resource_hashes": {field: value["sha256"] for field, value in binding["resources"].items()}})
     summary.update(restored_originals_sha256_verified=True, preserved_originals_unchanged=True, phase="playback_confirmation")
     summary["limits"]["restored_remote_bytes"] = "VERIFIED FOR ONE TEST " + profile.label.upper()
+    if profile == EDITED_PHOTO:
+        summary.update(restored_edited_rendition_sha256_verified=True, phase="crop_confirmation")
+        if input("Check the restored crop in Photos. Type EDITED PHOTO MATCHES: ").strip() != "EDITED PHOTO MATCHES":
+            raise trial.TrialBlocked("Crop remains unverified")
+        summary.update(phase="completed", restored_crop="USER REPORTED")
+        return
     plays_phrase = profile.label.upper() + " PLAYS"
     playback = "video playback and audio, if present" if profile == VIDEO else "Live Photo playback"
     if input(f"Check {playback} in Photos. Type {plays_phrase}: ").strip() != plays_phrase:
@@ -418,7 +454,7 @@ def run_trial(repo, service, root, zones, name, binding, baseline, inputs, run, 
 
 
 def main(profile):
-    if profile not in (LIVE_PHOTO, VIDEO):
+    if profile not in PROFILES:
         raise trial.TrialBlocked("Unsupported recovery profile")
     parser = argparse.ArgumentParser(description=f"Prepare one disposable {profile.label} recovery trial; live use needs approval.")
     parser.add_argument("--baseline", required=True)
@@ -432,7 +468,8 @@ def main(profile):
     summary = {"schema": 1, "scope": f"one_disposable_{profile.key}_trial", "provider_version": PIN,
                "started_at": datetime.now(timezone.utc).isoformat(), "phase": "offline_preparation",
                "authentication_attempted": False, "media_gets": 0, "lookup_requests": 0,
-               "modification_requests": 0, "restored_playback": "NOT VERIFIED", "limits": dict(trial.LIMITS)}
+               "modification_requests": 0, "limits": dict(trial.LIMITS)}
+    summary["restored_crop" if profile == EDITED_PHOTO else "restored_playback"] = "NOT VERIFIED"
     try:
         if version("icloudpd") != PIN:
             raise trial.TrialBlocked("Pinned provider version is required")
@@ -444,7 +481,7 @@ def main(profile):
         if args.live:
             if not sys.stdin.isatty() or not sys.stderr.isatty():
                 raise trial.TrialBlocked("Recovery trial requires your interactive Terminal and separate approval")
-            print(f"Scope: five-item album metadata, three paired lookups, {profile.max_gets} original GETs up to {profile.max_resource // (1024 * 1024)} MiB each, one removal.")
+            print(f"Scope: five-item album metadata, three paired lookups, {profile.max_gets} media GETs up to {profile.max_resource // (1024 * 1024)} MiB each, one removal.")
             if input(f"Type {profile.scope_phrase} to authenticate: ").strip() != profile.scope_phrase:
                 raise trial.TrialBlocked("Scope confirmation did not match; no authentication attempted")
             logging.disable(logging.CRITICAL)

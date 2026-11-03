@@ -38,11 +38,19 @@ class LivePhotoTrialTests(unittest.TestCase):
         self.urls = {field: "https://cvws.icloud-content.com/" + filename + "?token=SECRET_SIGNED_URL"
                      for field, (filename, _, _) in self.resources.items()}
         self.records = copy.deepcopy(self.fixture.records)
+        asset = next(r for r in self.records if r["recordName"] == fixtures.TARGET)
         master = next(r for r in self.records if r["recordName"] == fixtures.MASTER)
+        # Specify expected ownership independently of the production selector.
+        self.owners = {field: "asset" if self.profile.key == "edited_photo" and field == "resJPEGFullRes"
+                       else "master" for field in self.resources}
+        if self.profile.key == "edited_photo":
+            asset["fields"]["adjustmentType"] = {"value": "com.apple.photo"}
+            asset["fields"]["adjustmentRenderType"] = {"value": 18944}
         for field, (_, file_type, _) in self.resources.items():
-            master["fields"][field] = {"value": {"size": len(self.payloads[field]), "fileChecksum": "opaque-" + field,
+            owner = asset if self.owners[field] == "asset" else master
+            owner["fields"][field] = {"value": {"size": len(self.payloads[field]), "fileChecksum": "opaque-" + field,
                                                 "downloadURL": self.urls[field]}}
-            master["fields"][field.removesuffix("Res") + "FileType"] = {"value": file_type}
+            owner["fields"][field.removesuffix("Res") + "FileType"] = {"value": file_type}
         observation = {key: [] for key in ("assets", "masters", "relations")}
         for record in self.records:
             key = {"CPLAsset": "assets", "CPLMaster": "masters", "CPLContainerRelation": "relations"}[record["recordType"]]
@@ -62,7 +70,8 @@ class LivePhotoTrialTests(unittest.TestCase):
             digest = hashlib.sha256(self.payloads[field]).hexdigest()
             item = {key: self.baseline[key] for key in ("account_id", "database", "zone_id", "album_id")}
             item.update(asset_id=fixtures.TARGET, master_id=fixtures.MASTER, resource_field=field,
-                        resource_record_id=fixtures.MASTER, resource_record_type="CPLMaster", resource_file_type=file_type,
+                        resource_record_id=fixtures.TARGET if self.owners[field] == "asset" else fixtures.MASTER,
+                        resource_record_type="CPLAsset" if self.owners[field] == "asset" else "CPLMaster", resource_file_type=file_type,
                         resource_size=len(self.payloads[field]), downloaded_bytes=len(self.payloads[field]),
                         provider_checksum_opaque="opaque-" + field, copy_verified=True, download_complete=True,
                         response_sha256=digest, copy_a_sha256=digest, copy_b_sha256=digest)
@@ -112,8 +121,15 @@ class LivePhotoTrialTests(unittest.TestCase):
                     record["fields"]["isDeleted"] = {"value": None}
                     record["recordChangeTag"] = "restored-" + record["recordType"]
                 if case == "restoreresource":
-                    selected()[1]["fields"][last_field]["value"]["fileChecksum"] = "changed"
+                    owner = next(r for r in selected() if r["recordType"] == ("CPLAsset" if self.owners[last_field] == "asset" else "CPLMaster"))
+                    owner["fields"][last_field]["value"]["fileChecksum"] = "changed"
+                if case == "restoreedit":
+                    selected()[0]["fields"].pop("adjustmentType")
                 return "RESTORED ONE " + upper
+            if self.profile.key == "edited_photo":
+                self.assertIn("Check the restored crop in Photos", prompt)
+                self.assertIn(upper + " MATCHES", prompt)
+                return "NO" if case == "crop" else upper + " MATCHES"
             self.assertIn(upper + " PLAYS", prompt)
             return "NO" if case == "playback" else upper + " PLAYS"
 
@@ -160,6 +176,8 @@ class LivePhotoTrialTests(unittest.TestCase):
                 found = copy.deepcopy(selected())
                 if case == "lookupscope":
                     found[0]["zoneID"] = {**fixtures.ZONE, "ownerRecordName": "wrong"}
+                if case == "lookupowner":
+                    found[1]["fields"][last_field] = found[0]["fields"].pop(last_field)
                 if case == "removedunknown" and state["removed"]:
                     found[0]["fields"].pop("isDeleted")
                 return self.fixture.response(request, {"records": found})

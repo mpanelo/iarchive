@@ -113,7 +113,8 @@ class VideoTrialTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[2]
         for profile, filename, maximum, gets in (
                 (recovery.LIVE_PHOTO, 'live_photo_trial.py', 4 * 1024 * 1024, 4),
-                (recovery.VIDEO, 'video_trial.py', 8 * 1024 * 1024, 2)):
+                (recovery.VIDEO, 'video_trial.py', 8 * 1024 * 1024, 2),
+                (recovery.EDITED_PHOTO, 'edited_photo_trial.py', 4 * 1024 * 1024, 4)):
             with self.subTest(profile=profile.key):
                 self.assertEqual((profile.max_resource, profile.max_gets), (maximum, gets))
                 with self.assertRaises(FrozenInstanceError):
@@ -151,24 +152,25 @@ class VideoTrialTests(unittest.TestCase):
             send.assert_not_called()
 
     def test_completed_trial_supplies_baseline(self):
-        # The video starts from the completed Live Photo's final album capture.
+        # A completed trial can supply the next trial's five-item capture.
         path = self.fixture.baseline_dir / 'summary.json'
-        self.fixture.write(path, {'schema': 1, 'provider_version': recovery.PIN,
-                           'scope': 'one_disposable_live_photo_trial', 'phase': 'completed',
-                           'restored_originals_sha256_verified': True})
         self.fixture.write(self.fixture.baseline_dir / 'final-album-private.json', self.fixture.baseline)
-        result, summary, state, _, authenticate = self.fixture.run_cli('fromlive', execute=False)
-        self.assertEqual(result, 0, summary)
-        authenticate.assert_not_called()
-        self.assertEqual(state['calls'], [])
-        self.fixture.write(path, {'schema': 1, 'provider_version': recovery.PIN,
-                           'scope': 'one_disposable_live_photo_trial', 'phase': 'playback_confirmation',
-                           'restored_originals_sha256_verified': True})
-        result, summary, state, _, authenticate = self.fixture.run_cli('incompletebaseline')
-        self.assertEqual(result, 1)
-        self.assertIn('completed five-item metadata baseline', summary['finding'])
-        authenticate.assert_not_called()
-        self.assertEqual(state['calls'], [])
+        for profile in recovery.PROFILES:
+            cases = ('complete', 'unfinished', 'original') + (('rendition',) if profile == recovery.EDITED_PHOTO else ())
+            for case in cases:
+                status = {'schema': 1, 'provider_version': recovery.PIN,
+                          'scope': f'one_disposable_{profile.key}_trial',
+                          'phase': 'crop_confirmation' if case == 'unfinished' else 'completed',
+                          'restored_originals_sha256_verified': case != 'original',
+                          'restored_edited_rendition_sha256_verified': case != 'rendition'}
+                self.fixture.write(path, status)
+                with self.subTest(profile=profile.key, case=case):
+                    result, summary, state, _, authenticate = self.fixture.run_cli(profile.key + case, execute=False)
+                    self.assertEqual(result, 0 if case == 'complete' else 1, summary)
+                    if case != 'complete':
+                        self.assertIn('completed five-item metadata baseline', summary['finding'])
+                    authenticate.assert_not_called()
+                    self.assertEqual(state['calls'], [])
 
 
 if __name__ == '__main__':
