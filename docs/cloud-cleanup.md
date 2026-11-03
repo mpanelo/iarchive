@@ -31,6 +31,21 @@ physical-drive topology or cloud metadata. Complete resource relationships,
 cloud coverage and removal approval remain unverified. Files may change after
 a check. Keep reports and drafts private, and run one writer at a time.
 
+### Reopen a saved draft
+
+After closing a saved review, Terminal prints a **Reopen with** command. Run it
+to restore your choices. Any of the three published `draft.json` copies can be
+used with `--resume`:
+
+```sh
+python3 tools/cloud-cleanup/prepare_review.py --resume /path/to/draft.json
+```
+
+Reopening checks all three copies, the original evidence and both media roots.
+Edits create a new draft; existing drafts are never overwritten. Superseded,
+damaged or incomplete drafts are refused. Older drafts without reopen metadata
+need a new review. Reopening never approves cloud removal.
+
 ## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic

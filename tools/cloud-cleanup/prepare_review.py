@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import shlex
 import sys
 import threading
 import uuid
@@ -79,6 +80,9 @@ class ReviewDraft:
                 or report['limits'].get('physical_drive_independence') != claimed_drives):
             raise Blocked('Recorded physical topology is inconsistent')
         self.scope = {key: observation[key] for key in ('account_id', 'database', 'zone_id', 'album_id')}
+        self.evidence = {key: str(safe_path(path)) for key, path in (
+            ('reconciliation', reconciliation), ('resource_report', resource_report), ('download_manifest', download_manifest))}
+        self.evidence.update(primary_prefix=primary_prefix, secondary_prefix=secondary_prefix)
         matches = {(m['asset_id'], m['resource_record_type'], m['resource_record_id'], m['resource_field']): m
                    for m in expected['matches']}
         self.assets = []
@@ -94,6 +98,50 @@ class ReviewDraft:
                                 'asset_change_tag': asset['asset_change_tag'], 'master_change_tag': asset['master_change_tag'],
                                 'kind': 'Cloud item', 'resources': resources})
         self.check()
+
+    @classmethod
+    def reopen(cls, path):
+        path = safe_path(path)
+        envelope = evidence.object_value(evidence.load_input(path)[0])
+        if set(envelope) != {'payload', 'sha256'} or not isinstance(envelope['payload'], str):
+            raise Blocked('Saved draft envelope is invalid')
+        plan = Plan(envelope['payload'], evidence.sha256(envelope['sha256']))
+        data = evidence.object_value(plan.data())
+        if (type(data.get('schema')) is not int or data['schema'] != 1 or data.get('mode') != MODE
+                or canonical(data.get('limits')) != canonical(LIMITS)):
+            raise Blocked('Saved draft format or limits changed')
+        source = data.get('evidence')
+        keys = ('reconciliation', 'resource_report', 'download_manifest')
+        if not isinstance(source, dict) or set(source) != {*keys, 'primary_prefix', 'secondary_prefix'}:
+            raise Blocked('Saved draft lacks reopen metadata; prepare a new review')
+        input_hashes = evidence.object_value(data.get('input_sha256'))
+        # Bind the reports before using their paths to discover media roots.
+        for key in keys:
+            report = safe_path(Path(evidence.identity(source[key])))
+            if evidence.load_input(report)[1] != input_hashes.get(str(report)):
+                raise Blocked('Saved draft evidence changed; prepare a new review')
+        session = cls(*(Path(source[key]) for key in keys), source['primary_prefix'], source['secondary_prefix'])
+        selected = data.get('selected')
+        allowed = {asset['id'] for asset in session.assets}
+        if (not isinstance(selected, list) or any(type(key) is not str for key in selected)
+                or len(selected) != len(set(selected)) or selected != sorted(selected) or not set(selected) <= allowed
+                or type(data.get('revision')) is not int or data['revision'] < 0):
+            raise Blocked('Saved draft selection or revision is invalid')
+        expected = {'scope': session.scope, 'assets': session.assets, 'evidence': session.evidence,
+                    'input_sha256': {path: sha for path, (sha, _) in session.inputs.items()},
+                    'kept': [a['id'] for a in session.assets if a['id'] not in selected], 'count': len(selected),
+                    'bytes': sum(r['size'] for a in session.assets if a['id'] in selected for r in a['resources']),
+                    'recorded_physical_drives': session.recorded_drives}
+        if any(canonical(data.get(key)) != canonical(value) for key, value in expected.items()):
+            raise Blocked('Saved draft no longer matches its review evidence')
+        if canonical(data.get('root_identities')) != canonical(session.identities):
+            raise Blocked('Saved media root identities changed')
+        session.check_saved(plan)
+        if path.name != 'draft.json' or not any(os.path.samefile(path.parent, Path(output)) for output in data['outputs']):
+            raise Blocked('Saved draft must be reopened from a published copy')
+        session.check_inputs()
+        session.selected, session.revision, session.current = tuple(selected), data['revision'], plan
+        return session
 
     def root_identities(self):
         result = []
@@ -132,12 +180,25 @@ class ReviewDraft:
         self.phase = 'stopped'
 
     def check_saved(self, plan):
-        for output in plan.data()['outputs']:
-            path = safe_path(Path(output))
-            if (os.path.lexists(path / 'superseded.json')
-                    or evidence.load_input(path / 'draft.json')[0] != {'payload': plan.payload, 'sha256': plan.sha256}
-                    or evidence.load_input(path / 'complete.json')[0] != {'draft_sha256': plan.sha256}):
-                raise Blocked('A saved draft changed')
+        outputs = plan.data().get('outputs')
+        if not isinstance(outputs, list) or len(outputs) != 3:
+            raise Blocked('Saved draft needs three published locations')
+        names = set()
+        try:
+            for output, bundle in zip(outputs, self.bundles, strict=True):
+                path = safe_path(Path(evidence.identity(output)))
+                if path.parent.name != 'reviews' or not os.path.samefile(path.parent.parent, bundle):
+                    raise Blocked('Saved draft locations do not match its verification bundles')
+                names.add(path.name)
+                if os.path.lexists(path / 'superseded.json'):
+                    raise Blocked('Saved draft was superseded; use the newer draft')
+                if (evidence.load_input(path / 'draft.json')[0] != {'payload': plan.payload, 'sha256': plan.sha256}
+                        or evidence.load_input(path / 'complete.json')[0] != {'draft_sha256': plan.sha256}):
+                    raise Blocked('A saved draft changed')
+        except OSError:
+            raise Blocked('Saved draft copies are missing or unsafe') from None
+        if len(names) != 1:
+            raise Blocked('Saved draft copies refer to different revisions')
 
     def selected_bytes(self):
         return sum(r['size'] for a in self.assets if a['id'] in self.selected for r in a['resources'])
@@ -223,7 +284,8 @@ class ReviewDraft:
                         'selected': list(self.selected), 'kept': [a['id'] for a in self.assets if a['id'] not in self.selected],
                         'assets': self.assets, 'count': len(self.selected), 'outputs': outputs,
                         'input_sha256': {path: sha for path, (sha, _) in self.inputs.items()},
-                        'bytes': self.selected_bytes(), 'recorded_physical_drives': self.recorded_drives}
+                        'bytes': self.selected_bytes(), 'recorded_physical_drives': self.recorded_drives,
+                        'evidence': self.evidence, 'root_identities': self.identities}
                 plan = Plan(canonical(data), digest(data))
                 html = render(self.view(), plan.sha256)
                 for output in map(Path, outputs):
@@ -247,21 +309,34 @@ class ReviewDraft:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--reconciliation', required=True, type=Path)
-    parser.add_argument('--resource-report', required=True, type=Path)
-    parser.add_argument('--download-manifest', required=True, type=Path)
-    parser.add_argument('--primary-prefix', default='copy-a')
-    parser.add_argument('--secondary-prefix', default='copy-b')
+    parser.add_argument('--resume', type=Path, help='Reopen a published draft.json after checking all copies and media')
+    parser.add_argument('--reconciliation', type=Path)
+    parser.add_argument('--resource-report', type=Path)
+    parser.add_argument('--download-manifest', type=Path)
+    parser.add_argument('--primary-prefix')
+    parser.add_argument('--secondary-prefix')
     args = parser.parse_args()
     session = None
     try:
-        session = ReviewDraft(args.reconciliation, args.resource_report, args.download_manifest,
-                              args.primary_prefix, args.secondary_prefix)
+        paths = (args.reconciliation, args.resource_report, args.download_manifest)
+        if args.resume:
+            if any(value is not None for value in (*paths, args.primary_prefix, args.secondary_prefix)):
+                raise Blocked('Use --resume alone; saved evidence cannot be overridden')
+            session = ReviewDraft.reopen(args.resume)
+        else:
+            if any(path is None for path in paths):
+                raise Blocked('Supply all three evidence paths or --resume')
+            session = ReviewDraft(*paths, args.primary_prefix or 'copy-a', args.secondary_prefix or 'copy-b')
         from review import serve
         with serve(session) as url:
             print(f'Open the review: {url}', flush=True)
             print('Save a review draft in the page. Nothing will be removed. Press Enter here to close.', flush=True)
             input()
+        if session.current is not None:
+            path = Path(session.current.data()['outputs'][0]) / 'draft.json'
+            command = [sys.executable, str(Path(__file__).resolve()), '--resume', str(path)]
+            reopen = '& ' + ' '.join("'" + arg.replace("'", "''") + "'" for arg in command) if os.name == 'nt' else shlex.join(command)
+            print(f'Saved draft: {path}\nReopen with: {reopen}', flush=True)
         return int(session.phase == 'stopped')
     except ERRORS:
         print('Review could not use complete, unchanged evidence. Prepare fresh reconciliation and try again.', file=sys.stderr)

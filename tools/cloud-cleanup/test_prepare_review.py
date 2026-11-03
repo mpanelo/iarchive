@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cloud-prototype'))
 import test_reconcile as fixtures
 import prepare_review
 from prepare_review import Blocked, LIMITS, MODE, ReviewDraft
-from prototype import Plan
+from prototype import Plan, canonical, digest
 from review import serve
 
 
@@ -81,6 +81,94 @@ class EvidenceReviewTests(unittest.TestCase):
         self.assertEqual(session.current.data()['count'], 0)
         self.assertEqual(len(session.current.data()['kept']), 2)
 
+    def test_reopen_restores_saved_choices(self):
+        for selected in ([], ['full-asset-live']):
+            original = self.session()
+            original.draft(0, selected)
+            original.save(original.revision)
+            plan = original.current
+            paths = [Path(output) / 'draft.json' for output in plan.data()['outputs']]
+            before = {path: path.read_bytes() for path in paths}
+            original.close()
+            for path in paths:
+                with self.subTest(selected=selected, copy=path.parent.parent.parent.name):
+                    reopened = ReviewDraft.reopen(path)
+                    state = reopened.state()
+                    self.assertEqual(state['selected'], selected)
+                    self.assertEqual(state['revision'], plan.data()['revision'])
+                    self.assertEqual(state['draft_digest'], plan.sha256)
+                    self.assertIsNone(state['confirmation'])
+                    reopened.save(state['revision'])
+                    self.assertEqual(reopened.current, plan)
+                    reopened.close()
+            self.assertEqual(before, {path: path.read_bytes() for path in paths})
+            reopened = ReviewDraft.reopen(paths[0])
+            changed = [] if selected else ['full-asset-photo']
+            state = reopened.draft(reopened.revision, changed)
+            reopened.save(state['revision'])
+            self.assertNotEqual(reopened.current.sha256, plan.sha256)
+            self.assertEqual(reopened.current.data()['selected'], changed)
+            self.assertTrue(all((path.parent / 'superseded.json').exists() for path in paths))
+            with self.assertRaisesRegex(Blocked, 'superseded'):
+                ReviewDraft.reopen(paths[0])
+
+    def test_reopen_requires_three_intact_copies(self):
+        original = self.session()
+        original.save(0)
+        paths = [Path(output) for output in original.current.data()['outputs']]
+        draft = paths[0] / 'draft.json'
+        for case in ('missing', 'incomplete', 'changed', 'superseded'):
+            target = paths[-1] / ('complete.json' if case == 'incomplete' else 'draft.json')
+            before = target.read_bytes()
+            marker = paths[-1] / 'superseded.json'
+            try:
+                if case in ('missing', 'incomplete'):
+                    target.unlink()
+                elif case == 'changed':
+                    target.write_text('{}', encoding='utf-8')
+                else:
+                    marker.write_text('{}', encoding='utf-8')
+                with self.subTest(case=case), self.assertRaisesRegex(Blocked, 'saved draft|superseded|draft copies'):
+                    ReviewDraft.reopen(draft)
+            finally:
+                target.write_bytes(before)
+                marker.unlink(missing_ok=True)
+
+    def test_reopen_binds_selection_and_context(self):
+        original = self.session()
+        original.save(0)
+        plan = original.current
+        paths = [Path(output) for output in plan.data()['outputs']]
+        for case in ('selection', 'counts', 'scope', 'resources', 'limits', 'roots', 'locations', 'legacy'):
+            data = plan.data()
+            if case == 'selection':
+                data['selected'] = ['missing-asset']
+            elif case == 'counts':
+                data['bytes'] += 1
+            elif case == 'scope':
+                data['scope']['account_id'] = 'different-account'
+            elif case == 'resources':
+                data['assets'][0]['resources'].pop()
+            elif case == 'limits':
+                data['limits']['removal_approved'] = True
+            elif case == 'roots':
+                data['root_identities'][0][1] += 1
+            elif case == 'locations':
+                data['outputs'][-1] = str(self.root)
+            else:
+                data.pop('evidence')
+            edited = Plan(canonical(data), digest(data))
+            try:
+                for path in paths:
+                    (path / 'draft.json').write_text(canonical({'payload': edited.payload, 'sha256': edited.sha256}), encoding='utf-8')
+                    (path / 'complete.json').write_text(canonical({'draft_sha256': edited.sha256}), encoding='utf-8')
+                with self.subTest(case=case), self.assertRaisesRegex(Blocked, 'Saved draft|Saved media|reopen metadata'):
+                    ReviewDraft.reopen(paths[0] / 'draft.json')
+            finally:
+                for path in paths:
+                    (path / 'draft.json').write_text(canonical({'payload': plan.payload, 'sha256': plan.sha256}), encoding='utf-8')
+                    (path / 'complete.json').write_text(canonical({'draft_sha256': plan.sha256}), encoding='utf-8')
+
     def test_incomplete_evidence_blocks_preparation(self):
         originals = {path: path.read_bytes() for path in self.paths}
         cases = {'mode': 'complete fresh reconciliation', 'findings': 'complete fresh reconciliation',
@@ -124,12 +212,17 @@ class EvidenceReviewTests(unittest.TestCase):
         self.assertEqual(session.phase, 'stopped')
         self.assertIsNone(session.state()['draft_digest'])
 
-    def test_changed_media_blocks_draft_save(self):
+    def test_media_changes_stop_save_and_reopen(self):
         for side in ('copy-a', 'copy-b'):
             path = next((self.root / side).iterdir())
             original, info = path.read_bytes(), path.stat()
-            for case in ('bytes', 'missing', 'extra'):
+            for case, operation in ((case, operation) for case in ('bytes', 'missing', 'extra')
+                                    for operation in ('save', 'reopen')):
                 session = self.session()
+                if operation == 'reopen':
+                    session.save(0)
+                    draft = Path(session.current.data()['outputs'][0]) / 'draft.json'
+                    session.close()
                 extra = path.parent / 'unexpected.mov'
                 try:
                     if case == 'bytes':
@@ -139,9 +232,11 @@ class EvidenceReviewTests(unittest.TestCase):
                         path.unlink()
                     else:
                         extra.write_bytes(b'unknown companion')
-                    with self.subTest(side=side, case=case), self.assertRaisesRegex(Blocked, 'verified and saved'):
-                        session.save(0)
-                    self.assertEqual(session.phase, 'stopped')
+                    finding = 'verified and saved' if operation == 'save' else 'Replica (bytes|file set) changed'
+                    with self.subTest(side=side, case=case, operation=operation), self.assertRaisesRegex(Blocked, finding):
+                        session.save(0) if operation == 'save' else ReviewDraft.reopen(draft)
+                    if operation == 'save':
+                        self.assertEqual(session.phase, 'stopped')
                     if case == 'bytes':
                         self.assertEqual(path.read_bytes(), b'x' * len(original))
                 finally:
@@ -222,6 +317,26 @@ class EvidenceReviewTests(unittest.TestCase):
                     patch('review.serve', side_effect=opened), patch('builtins.input', return_value=''), redirect_stdout(output):
                 self.assertEqual(prepare_review.main(), 0)
         self.assertIn('Open the review: http://127.0.0.1:', output.getvalue())
+        self.assertNotIn('full-asset-live', output.getvalue())
+
+    def test_cli_reopens_saved_review(self):
+        from contextlib import contextmanager
+        original = self.session()
+        original.draft(0, ['full-asset-live'])
+        original.save(1)
+        path = Path(original.current.data()['outputs'][1]) / 'draft.json'
+        @contextmanager
+        def opened(session):
+            self.assertEqual(session.state()['selected'], ['full-asset-live'])
+            self.assertEqual(session.current, original.current)
+            yield 'http://127.0.0.1:1234/#synthetic-token'
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['prepare_review.py', '--resume', str(path)]), \
+                patch('review.serve', side_effect=opened), patch('builtins.input', return_value=''), redirect_stdout(output):
+            self.assertEqual(prepare_review.main(), 0)
+        self.assertIn('Saved draft:', output.getvalue())
+        self.assertIn('Reopen with:', output.getvalue())
+        self.assertIn('--resume', output.getvalue())
         self.assertNotIn('full-asset-live', output.getvalue())
 
 
