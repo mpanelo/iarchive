@@ -1,4 +1,37 @@
-# Cloud cleanup preview
+# Cloud cleanup review
+
+These helpers save local review notes. They never remove items from iCloud.
+
+## Review matched archive items
+
+Run [fresh reconciliation](../tools/cloud-prototype/README.md#verify-current-copies)
+and save its JSON output as `reconciliation-private.json`. Use the same resource
+report and download manifest:
+
+```sh
+python3 tools/cloud-cleanup/prepare_review.py --reconciliation reconciliation-private.json --resource-report resource-report-private.json --download-manifest download-manifest-private.json
+```
+
+On Windows, use `python` instead of `python3`.
+
+1. Keep Terminal open and open its printed review link.
+2. Check items to include in a draft. Everything starts kept; variants stay together.
+3. Click **Save draft**. You can also save a draft that keeps everything.
+4. Adjust the selection and save again, or press Enter in Terminal to close.
+
+The page shows resource paths, byte counts and verification status. It does not
+generate media previews. Saving rehashes both copies and writes identical drafts
+under `reviews` in all three verification bundles, outside media. Each save has
+a SHA-256 digest; it is not a removal confirmation or an approval signature.
+Edits retire the previous draft. Changed evidence, missing or damaged files,
+or an incomplete save stop the review and require fresh preparation.
+
+The recorded OS drive check is shown separately. This helper does not refresh
+physical-drive topology or cloud metadata. Complete resource relationships,
+cloud coverage and removal approval remain unverified. Files may change after
+a check. Keep reports and drafts private, and run one writer at a time.
+
+## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic
 files and two local copies in a fresh temporary directory. It never signs in,
@@ -42,7 +75,7 @@ the journal instead. Journal files are numbered, identical events at all three
 locations. An interrupted write can leave incomplete copies; that is a failure,
 not permission to continue.
 
-## Limits
+### Demo limits
 
 The two folders are on one filesystem. This demo does not prove independent
 drives, real cloud-to-file relationships, full cloud coverage or recovery.

@@ -44,6 +44,10 @@ details { color: var(--muted); font-size: 12px; }
 summary { cursor: pointer; }
 .variants { padding: 0; list-style: none; margin: 10px 0; }
 .variants li { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.variants code { display: block; overflow-wrap: anywhere; font-size: 11px; }
+#verification-status { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; }
+#verification-status dt { font-weight: 600; }
+#verification-status dd { margin: 0; overflow-wrap: anywhere; }
 .selection { border-top: 1px solid var(--line); padding-top: 15px; margin-top: 16px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
 .selection input { width: 19px; height: 19px; margin: 0; accent-color: var(--accent); }
 .kept .selection { color: var(--muted); }

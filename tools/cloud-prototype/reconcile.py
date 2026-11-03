@@ -340,15 +340,16 @@ def load_input(path, jsonl=False):
             raise Blocked("Evidence input changed during reading")
     if len(raw) > MAX_INPUT_BYTES:
         raise Blocked("Evidence input exceeds the bounded research limit")
-    text = raw.decode("utf-8")
     parse = lambda value: json.loads(value, object_pairs_hook=unique_object, parse_constant=reject_constant)
     if jsonl:
-        lines = text.splitlines()
+        lines = raw.decode("utf-8-sig").splitlines()
         if not lines or len(lines) > MAX_RECORDS or any(not line.strip() for line in lines):
             raise Blocked("Empty, oversized or interrupted JSONL manifest")
         value = [parse(line) for line in lines]
     else:
-        value = parse(text)
+        # Native PowerShell redirection can add a UTF-8 BOM or use UTF-16.
+        # json.loads detects JSON encodings; the seal still binds original bytes.
+        value = parse(raw)
     return value, hashlib.sha256(raw).hexdigest()
 
 

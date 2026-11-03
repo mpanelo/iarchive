@@ -22,25 +22,41 @@ function paint(next) {
   if (!byId('cards').children.length) byId('cards').innerHTML = state.cards;
   const selected = new Set(state.selected);
   const closed = state.phase !== 'reviewing';
+  const draft = state.mode === 'review_draft';
   document.querySelectorAll('.selection input').forEach(input => {
     input.checked = selected.has(input.value);
     input.disabled = busy || closed;
     const card = input.closest('article');
     card.classList.toggle('selected', input.checked);
     card.classList.toggle('kept', !input.checked);
-    card.querySelector('.selection-label').textContent = input.checked ? 'Remove from cloud' : 'Keep in cloud';
+    card.querySelector('.selection-label').textContent = draft ?
+      (input.checked ? 'Include in draft' : 'Keep in iCloud') : (input.checked ? 'Remove from cloud' : 'Keep in cloud');
   });
   byId('selection-summary').textContent = `${state.count} selected · ${state.total - state.count} kept`;
-  byId('save-status').textContent = busy ? 'Updating selection…' : closed ? 'Review closed. Check Terminal for the result.' :
+  byId('save-status').textContent = busy ? 'Updating selection…' : closed ?
+    (draft ? 'Review closed or evidence changed. Prepare a new review to continue.' : 'Review closed. Check Terminal for the result.') : draft ?
+    (state.saved ? 'Draft saved. Close this page or adjust your selection.' : 'Save your choices as a draft. Nothing will be removed.') :
     state.count === 0 ? 'All items will be kept. Cancel in Terminal, or select an item.' :
     state.saved ? 'Copy the confirmation below, then paste it into Terminal.' : 'Unsaved changes. Previous confirmation is no longer valid.';
-  byId('save').textContent = state.saved ? 'Continue to confirmation' : 'Save selection';
-  byId('save').disabled = busy || closed || state.count === 0;
+  byId('save').textContent = draft ? (state.saved ? 'Draft saved' : 'Save draft') : (state.saved ? 'Continue to confirmation' : 'Save selection');
+  byId('save').disabled = busy || closed || (draft ? state.saved : state.count === 0);
   byId('select-all').disabled = busy || closed || state.count === state.total;
   byId('keep-all').disabled = busy || closed || state.count === 0;
-  byId('next-step').hidden = busy || !state.confirmation || closed;
-  byId('confirmation').value = state.confirmation || '';
-  byId('copy').disabled = busy || !state.confirmation || closed;
+  const digest = draft ? state.draft_digest : state.confirmation;
+  byId('next-step').hidden = busy || !digest || closed;
+  byId('confirmation').value = digest || '';
+  byId('copy').disabled = busy || !digest || closed;
+  const verification = byId('verification-status');
+  if (verification) {
+    verification.replaceChildren();
+    Object.entries(state.verification).forEach(([label, value]) => {
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      verification.append(term, detail);
+    });
+  }
   const backups = byId('backups');
   if (!backups.children.length) state.roots.forEach((root, index) => {
     const row = document.createElement('li');
@@ -60,7 +76,7 @@ async function change(path, body) {
   byId('copy-status').textContent = '';
   // Update only card states, never replace the page or its illustrations.
   paint(body.selected ? {...state, selected: body.selected, count: body.selected.length,
-    saved: false, confirmation: null} : state);
+    saved: false, confirmation: null, draft_digest: null} : state);
   let next = state;
   try {
     next = await request(path, body);
@@ -68,13 +84,14 @@ async function change(path, body) {
     byId('message').textContent = error.message;
     try { next = await request('/api/state'); }
     catch (_) {
-      next = {...state, saved: false, confirmation: null, phase: 'stopped'};
-      byId('message').textContent = 'Review connection lost. Do not use an earlier confirmation; check Terminal.';
+      next = {...state, saved: false, confirmation: null, draft_digest: null, phase: 'stopped'};
+      byId('message').textContent = state.mode === 'review_draft' ? 'Review connection lost. Reopen a new review before saving.' :
+        'Review connection lost. Do not use an earlier confirmation; check Terminal.';
     }
   } finally {
     busy = false;
     paint(next);
-    if (path === '/api/save' && state.confirmation) showConfirmation();
+    if (path === '/api/save' && (state.confirmation || state.draft_digest)) showConfirmation();
   }
 }
 
@@ -98,12 +115,14 @@ byId('save').addEventListener('click', () => {
 });
 byId('copy').addEventListener('click', async () => {
   try {
-    await navigator.clipboard.writeText(state.confirmation);
-    byId('copy-status').textContent = 'Copied. Paste into the waiting Terminal to run the simulation.';
+    await navigator.clipboard.writeText(state.draft_digest || state.confirmation);
+    byId('copy-status').textContent = state.mode === 'review_draft' ? 'Draft digest copied. This is not a removal confirmation.' :
+      'Copied. Paste into the waiting Terminal to run the simulation.';
   } catch (_) {
     byId('confirmation').focus();
     byId('confirmation').select();
-    byId('copy-status').textContent = 'Copy the selected text, then paste it into Terminal.';
+    byId('copy-status').textContent = state.mode === 'review_draft' ? 'Copy the selected draft digest.' :
+      'Copy the selected text, then paste it into Terminal.';
   }
 });
 if (!token) byId('message').textContent = 'Open the complete review link printed in Terminal.';
