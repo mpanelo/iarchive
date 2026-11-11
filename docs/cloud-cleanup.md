@@ -46,6 +46,28 @@ Edits create a new draft; existing drafts are never overwritten. Superseded,
 damaged or incomplete drafts are refused. Older drafts without reopen metadata
 need a new review. Reopening never approves cloud removal.
 
+### Rehearse preflight confirmation
+
+For a saved draft containing selected items:
+
+```sh
+python3 tools/cloud-cleanup/preflight.py --simulate --draft /path/to/draft.json
+```
+
+The helper rehashes both copies and compares an in-memory metadata model before
+and after your confirmation. Type the printed phrase with the exact count and
+full plan digest within two minutes. A blank answer cancels.
+
+The model starts from the draft's recorded metadata. It does not read iCloud or
+prove current cloud coverage, drive independence or server-side race protection.
+This rehearses the checks and confirmation; it never approves removal.
+
+Matching plans, confirmation intents and receipts are saved under `preflight`
+beside all three draft copies. A receipt requires matching `receipt.json` and
+`complete.json` files in every location. Partial writes, changed evidence,
+expired confirmations or failed checks stop the rehearsal. Start a new rehearsal
+after a failure; previous confirmations cannot be reused.
+
 ## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic
