@@ -103,10 +103,10 @@ fn inventory(root: &Path, issues: &mut Vec<String>) -> Result<Vec<FileFact>> {
                 prefix.push('/');
             }
             prefix.push_str(part);
-            if let Some(previous) = names.insert(collision_key(&prefix), prefix.clone()) {
-                if previous != prefix {
-                    issues.push(format!("Case/Unicode collision: {previous} | {prefix}"));
-                }
+            if let Some(previous) = names.insert(collision_key(&prefix), prefix.clone())
+                && previous != prefix
+            {
+                issues.push(format!("Case/Unicode collision: {previous} | {prefix}"));
             }
         }
         for warning in &fact.warnings {

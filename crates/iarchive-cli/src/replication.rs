@@ -225,10 +225,11 @@ pub fn run(
             &serde_json::to_string(&report)?,
         )?;
         if let Some(bundle) = bundle {
-            if !summary.complete && !bundle.join("summary.json").exists() {
-                if let Err(error) = write_json(&bundle.join("failure.json"), &report) {
-                    tracing::error!(%error, "could not save failure artifact; SQLite retains incomplete state");
-                }
+            if !summary.complete
+                && !bundle.join("summary.json").exists()
+                && let Err(error) = write_json(&bundle.join("failure.json"), &report)
+            {
+                tracing::error!(%error, "could not save failure artifact; SQLite retains incomplete state");
             }
             report["state_bundle"] = json!(bundle);
         }

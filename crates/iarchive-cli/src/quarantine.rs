@@ -98,16 +98,16 @@ fn preview(
     let kept = store.kept_review_files()?;
     let mut selected = BTreeMap::new();
     for group in &view.groups {
-        if let Some(decision) = &group.decision {
-            if decision.action == ReviewAction::FlagSelected {
-                for file in &group.members {
-                    if decision.selected.contains(&file.id) {
-                        selected
-                            .entry(file.id)
-                            .or_insert_with(|| (file, vec![]))
-                            .1
-                            .push(group.fingerprint.clone());
-                    }
+        if let Some(decision) = &group.decision
+            && decision.action == ReviewAction::FlagSelected
+        {
+            for file in &group.members {
+                if decision.selected.contains(&file.id) {
+                    selected
+                        .entry(file.id)
+                        .or_insert_with(|| (file, vec![]))
+                        .1
+                        .push(group.fingerprint.clone());
                 }
             }
         }
@@ -189,12 +189,11 @@ fn preview(
                         reasons.push("Associated image lacks successful image analysis".into());
                     }
                 }
-                if let Some(binding) = &binding {
-                    if !binding.files.contains(&member.fact) {
-                        reasons.push(
-                            "Reviewed file facts do not match the frozen backup snapshot".into(),
-                        );
-                    }
+                if let Some(binding) = &binding
+                    && !binding.files.contains(&member.fact)
+                {
+                    reasons
+                        .push("Reviewed file facts do not match the frozen backup snapshot".into());
                 }
             }
             if seen.insert(group.fingerprint.clone()) {
@@ -203,17 +202,17 @@ fn preview(
         } else {
             reasons.push("Associated file relationships are unknown; no metadata identity".into());
         }
-        if let Some(binding) = &binding {
-            if !binding.files.iter().any(|f| {
+        if let Some(binding) = &binding
+            && !binding.files.iter().any(|f| {
                 file.cycle == cycle
                     && f.relative_path == file.relative_path
                     && f.sha256 == file.sha256
                     && f.byte_count == file.byte_count
                     && f.mtime_ns == file.mtime_ns
                     && f.error.is_none()
-            }) {
-                reasons.push("Reviewed file facts do not match the frozen backup snapshot".into());
-            }
+            })
+        {
+            reasons.push("Reviewed file facts do not match the frozen backup snapshot".into());
         }
         reasons.sort();
         reasons.dedup();

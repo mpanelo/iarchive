@@ -126,7 +126,7 @@ fn scan(store: &mut Store, cycle: &str, deep: bool) -> Result<serde_json::Value>
             }
             store.save_file(cycle, id, &fact)?;
             visited += 1;
-            if visited % 1000 == 0 || last_progress.elapsed() >= Duration::from_secs(2) {
+            if visited.is_multiple_of(1000) || last_progress.elapsed() >= Duration::from_secs(2) {
                 tracing::info!(
                     cycle,
                     files = visited,

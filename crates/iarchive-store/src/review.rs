@@ -126,14 +126,16 @@ impl Store {
         if let Some(location) = moved.get(&id) {
             file.location = location.clone();
         }
-        if file.present && file.file_error.is_none() && file.decode_error.is_none() {
-            if let Some(features) = features {
-                let parsed: ImageFeatures = serde_json::from_str(&features)?;
-                file.thumbnail = Some(parsed.thumbnail.clone());
-                let mut metrics = serde_json::to_value(parsed)?;
-                metrics.as_object_mut().unwrap().remove("thumbnail");
-                file.features = Some(metrics);
-            }
+        if file.present
+            && file.file_error.is_none()
+            && file.decode_error.is_none()
+            && let Some(features) = features
+        {
+            let parsed: ImageFeatures = serde_json::from_str(&features)?;
+            file.thumbnail = Some(parsed.thumbnail.clone());
+            let mut metrics = serde_json::to_value(parsed)?;
+            metrics.as_object_mut().unwrap().remove("thumbnail");
+            file.features = Some(metrics);
         }
         Ok(file)
     }

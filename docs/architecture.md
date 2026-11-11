@@ -10,7 +10,7 @@
 | `iarchive-fs` | Inventory, hashes, copying and drive checks. |
 | `image-worker` | Local image decoding and measurements, managed by uv. |
 
-Rust uses edition 2024 with a declared minimum of 1.85. That minimum is not yet
+Rust uses edition 2024 with a declared minimum of 1.89. That minimum is not yet
 independently tested. Dependencies include bundled rusqlite, clap, serde/TOML,
 SHA-256, walkdir and fs2. Cloud operations are unavailable; the supplied inventory
 provider returns an error and exposes no deletion method.
@@ -54,7 +54,7 @@ publish through `tempfile::persist_noclobber`. Final inventories rehash both roo
 Resume restarts unfinished files from zero; it never trusts old partial bytes.
 
 Success publishes matching manifest/database/summary bundles in app state and
-both artifact directories. [SQLite backup](https://docs.rs/rusqlite/0.40.2/rusqlite/backup/index.html)
+both artifact directories. [SQLite backup](https://docs.rs/rusqlite/0.41.1/rusqlite/backup/index.html)
 includes WAL contents. Publication is not a cross-volume transaction; failed runs
 invalidate completion and retain historical artifacts. See [recovery](replication.md#results-and-recovery).
 
