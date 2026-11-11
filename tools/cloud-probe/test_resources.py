@@ -146,14 +146,24 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(missing[0]["resource_field"], "resOriginalVidComplRes")
         self.assertEqual(report["summary"]["observed_resources"], 11)
 
-    def test_ambiguous_owners_preserve_resources(self):
-        add_resource(self.records[0], "resOriginal", "public.heic")
-        report = build_resource_report(observation(self.records), self.expectations)
-        originals = [item for item in report["resources"] if item["resource_field"] == "resOriginalRes"
-                     and "full-asset-live" in item["asset_ids"]]
-        self.assertEqual({item["record_type"] for item in originals}, {"CPLAsset", "CPLMaster"})
-        self.assertIn("ambiguous_resource_ownership", report["summary"]["resource_finding_counts"])
-        self.assertEqual(report["summary"]["expectation_status"], "FINDINGS")
+    def test_owner_variants_remain_separate(self):
+        for prefix in ("resOriginal", "resOriginalAlt", "resOriginalVidCompl", "resJPEGFull", "resVidFull", "resSidecar",
+                       "resJPEGLarge", "resJPEGMed", "resJPEGThumb", "resVidMed", "resVidSmall"):
+            with self.subTest(prefix=prefix):
+                records = copy.deepcopy(self.records)
+                add_resource(records[0], prefix, "public.jpeg", size=13)
+                add_resource(records[1], prefix, "public.jpeg", size=17)
+                expectations = copy.deepcopy(self.expectations)
+                if prefix + "Res" not in expectations['full-asset-live']:
+                    expectations['full-asset-live'].append(prefix + "Res")
+                report = build_resource_report(observation(records), expectations)
+                variants = [item for item in report['resources'] if item['resource_field'] == prefix + 'Res'
+                            and 'full-asset-live' in item['asset_ids']]
+                self.assertEqual({(item['record_type'], item['record_id'], item['size']) for item in variants},
+                                 {('CPLAsset', 'full-asset-live', 13), ('CPLMaster', 'full-master-live', 17)})
+                preview = prefix in ('resJPEGLarge', 'resJPEGMed', 'resJPEGThumb', 'resVidMed', 'resVidSmall')
+                self.assertEqual('ambiguous_resource_ownership' in report['summary']['resource_finding_counts'], not preview)
+                self.assertEqual(report['summary']['expectation_status'], 'MATCHED OBSERVED FIELDS' if preview else 'FINDINGS')
 
     def test_master_relationship_findings(self):
         value = observation(self.records)

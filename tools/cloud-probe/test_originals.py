@@ -48,7 +48,7 @@ def inventory():
 def variant_inventory():
     from test_resources import add_resource, variant_records
     records, _ = variant_records()
-    # Preserve a preview ownership finding while selecting other exact fields.
+    # Include both owners' previews without broadening the fixed download scope.
     add_resource(records[1], "resJPEGThumb", "public.jpeg")
     for number, record in enumerate(records):
         for field, entry in record["fields"].items():
@@ -128,8 +128,9 @@ class OriginalTests(unittest.TestCase):
             self.assertEqual(binding['resource_file_type'], owner['fields'][field.removesuffix('Res') + 'FileType'])
             self.assertEqual(binding['resource_size'], owner['fields'][field]['size'])
             self.assertEqual(binding['provider_checksum_opaque'], owner['fields'][field]['fileChecksum'])
-        self.assertEqual(private['resource_report']['summary']['resource_finding_counts'],
-                         {'ambiguous_resource_ownership': 1})
+        self.assertEqual(private['resource_report']['findings'], [])
+        self.assertEqual(len(private['resource_report']['resources']), 13)
+        self.assertFalse(any(plan['binding']['resource_field'] == 'resJPEGThumbRes' for plan in plans))
 
     def test_variant_scope_rejects_changes(self):
         private, urls = variant_inventory()

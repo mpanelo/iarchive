@@ -28,6 +28,8 @@ RESOURCE_FIELDS = frozenset((
     "resJPEGFullRes", "resVidFullRes", "resSidecarRes", "resJPEGLargeRes",
     "resJPEGMedRes", "resJPEGThumbRes", "resVidMedRes", "resVidSmallRes",
 ))
+PREVIEW_FIELDS = frozenset(("resJPEGLargeRes", "resJPEGMedRes", "resJPEGThumbRes",
+                            "resVidMedRes", "resVidSmallRes"))
 LIMITS = {
     "cloud_coverage": "NOT VERIFIED",
     "fresh_local_bytes": "NOT VERIFIED",
@@ -170,7 +172,11 @@ def reconcile(observation, download, replica, primary_prefix="copy-a", secondary
             invalid.add(index)
             continue
         asset = assets[ids[0]]
-        by_asset_field[(ids[0], key[2])].append(index)
+        # A preview field may occur on both the asset and its master. Keep the
+        # full owner tuple unique; only non-preview fields must also be unique
+        # across the logical asset's owners.
+        if key[2] not in PREVIEW_FIELDS:
+            by_asset_field[(ids[0], key[2])].append(index)
         expected = {"CPLAsset": (asset["asset_id"], asset["asset_change_tag"]),
                     "CPLMaster": (asset["master_id"], asset["master_change_tag"])}.get(key[0])
         if (expected is None or (key[1], resource.get("record_change_tag")) != expected

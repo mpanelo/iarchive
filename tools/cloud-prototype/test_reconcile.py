@@ -72,9 +72,20 @@ class ReconcileTests(unittest.TestCase):
                 url = f"https://cvws.icloud-content.com/{suffix}/{field}?token=SECRET_SIGNED_URL"
                 urls[(owner["recordType"], owner["recordName"], field)] = url
                 bodies[url] = content
+            if getattr(self, 'include_previews', False) and suffix == 'live':
+                for owner in (asset, master):
+                    content = f"invented {owner['recordType']} thumbnail".encode()
+                    owner['fields']['resJPEGThumbRes'] = {'size': len(content), 'fileChecksum': 'OPAQUE_PREVIEW',
+                                                         'download_url_present': True}
+                    owner['fields']['resJPEGThumbFileType'] = 'public.jpeg'
+                    url = f"https://cvws.icloud-content.com/{owner['recordType']}/thumb?token=SECRET_SIGNED_URL"
+                    urls[(owner['recordType'], owner['recordName'], 'resJPEGThumbRes')] = url
+                    bodies[url] = content
             observation["assets"].append(asset)
             observation["masters"].append(master)
             expectations[asset_id] = list(variants)
+            if 'resJPEGThumbRes' in asset['fields']:
+                expectations[asset_id].append('resJPEGThumbRes')
         # Exercise the actual capture boundary: account and structured zone must
         # come from probe.main(), not a hand-built approximation of its format.
         raw = []
@@ -123,6 +134,19 @@ class ReconcileTests(unittest.TestCase):
         baseline = json.loads((captured / "album-private.json").read_text())
         plans = select_resources(baseline, baseline, urls, account, 2,
                                  {"resOriginalRes": 2, "resOriginalVidComplRes": 1, "resJPEGFullRes": 1}, 1024)
+        if getattr(self, 'include_previews', False):
+            # Fixture provenance is owner-qualified. The fixed original-download
+            # experiment intentionally cannot select both same-named previews.
+            template = next(plan['binding'] for plan in plans if plan['binding']['asset_id'] == 'full-asset-live')
+            for record in (*observation['assets'], *observation['masters']):
+                if 'resJPEGThumbRes' not in record['fields']:
+                    continue
+                resource = record['fields']['resJPEGThumbRes']
+                binding = {**template, 'resource_record_type': record['recordType'],
+                           'resource_record_id': record['recordName'], 'resource_record_change_tag': record['recordChangeTag'],
+                           'resource_field': 'resJPEGThumbRes', 'resource_size': resource['size'],
+                           'resource_file_type': 'public.jpeg', 'provider_checksum_opaque': resource['fileChecksum']}
+                plans.append({'binding': binding, 'url': urls[(record['recordType'], record['recordName'], 'resJPEGThumbRes')]})
         run_downloads(None, plans, self.root, {}, self.write_json,
                       fetch=lambda _session, url, _offset: Response(bodies[url]))
         self.download = json.loads((self.root / "download-manifest-private.json").read_text())
@@ -456,6 +480,43 @@ class ReconcileTests(unittest.TestCase):
         next(a for a in self.observation["assets"] if a["asset_id"] == resource["asset_ids"][0])[
             "resource_indices"].append(index)
         self.assertIn("ambiguous_resource_identity", self.codes())
+
+    def test_preview_owners_remain_distinct(self):
+        fixture = ReconcileTests()
+        fixture.include_previews = True
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        for field in ('resJPEGLargeRes', 'resJPEGMedRes', 'resJPEGThumbRes', 'resVidMedRes', 'resVidSmallRes',
+                      'resOriginalRes', 'resOriginalAltRes', 'resOriginalVidComplRes', 'resJPEGFullRes', 'resVidFullRes', 'resSidecarRes'):
+            observation, downloads = copy.deepcopy((fixture.observation, fixture.download))
+            for resource in observation['resources']:
+                if resource['resource_field'] == 'resJPEGThumbRes':
+                    resource['resource_field'] = field
+            for resource in downloads['resources']:
+                if resource['resource_field'] == 'resJPEGThumbRes':
+                    resource['resource_field'] = field
+            observation['expected_fields']['full-asset-live'].remove('resJPEGThumbRes')
+            if field not in observation['expected_fields']['full-asset-live']:
+                observation['expected_fields']['full-asset-live'].append(field)
+            result = reconcile(observation, downloads, fixture.replica)
+            with self.subTest(field=field):
+                if field in ('resOriginalRes', 'resOriginalAltRes', 'resOriginalVidComplRes', 'resJPEGFullRes', 'resVidFullRes', 'resSidecarRes'):
+                    self.assertIn('ambiguous_resource_identity', {item['code'] for item in result['findings']})
+                    self.assertLess(result['summary']['matched_resources'], 6)
+                    continue
+                self.assertEqual(result['findings'], [])
+                self.assertEqual(result['summary']['matched_resources'], 6)
+                previews = [item for item in result['matches'] if item['resource_field'] == field]
+                self.assertEqual({(item['resource_record_type'], item['resource_record_id']) for item in previews},
+                                 {('CPLAsset', 'full-asset-live'), ('CPLMaster', 'full-master-live')})
+                self.assertEqual(len({item['relative_path'] for item in previews}), 2)
+                self.assertEqual(len({item['recorded_sha256'] for item in previews}), 2)
+        duplicate = copy.deepcopy(next(item for item in fixture.observation['resources']
+                                       if item['resource_field'] == 'resJPEGThumbRes'))
+        index = len(fixture.observation['resources'])
+        fixture.observation['resources'].append(duplicate)
+        next(asset for asset in fixture.observation['assets'] if asset['asset_id'] == duplicate['asset_ids'][0])['resource_indices'].append(index)
+        self.assertIn('ambiguous_resource_identity', fixture.codes())
 
     def test_cli_reports_bind_input_bytes(self):
         files = [self.root / name for name in ("observations.json", "downloads.json", "replica.jsonl")]

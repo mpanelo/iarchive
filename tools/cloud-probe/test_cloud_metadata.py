@@ -25,6 +25,7 @@ import test_album as album
 class CloudMetadataTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.EvidenceReviewTests()
+        self.fixture.include_previews = True
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.review = self.fixture.session()
@@ -99,6 +100,12 @@ class CloudMetadataTests(unittest.TestCase):
         phrase = gate.prepare()
         self.assertTrue(phrase.startswith('CONFIRM READ ONLY PREFLIGHT 1 '))
         receipt = gate.confirm(phrase)
+        previews = [resource for resource in gate.plan.data()['targets'][0]['resources']
+                    if resource['resource_field'] == 'resJPEGThumbRes']
+        self.assertEqual(len(previews), 2)
+        self.assertEqual({item['resource_record_type'] for item in previews}, {'CPLAsset', 'CPLMaster'})
+        self.assertEqual(len({item['relative_path'] for item in previews}), 2)
+        self.assertEqual(len({item['recorded_sha256'] for item in previews}), 2)
         self.assertEqual(receipt['result'], 'READ_ONLY_CHECK_CONFIRMED')
         self.assertEqual(receipt['provider_metadata'], 'OBSERVED ICLOUD METADATA MATCHED')
         self.assertFalse(receipt['limits']['removal_approved'])
@@ -180,13 +187,22 @@ class CloudMetadataTests(unittest.TestCase):
                     self.service.data['dsInfo']['dsid'] = 'synthetic-account'
 
     def test_changed_metadata_blocks_confirmation(self):
-        for case in ('tag', 'resource', 'unknown', 'passes'):
+        for case in ('tag', 'resource', 'asset_preview', 'master_preview', 'missing_preview', 'unknown', 'passes'):
             gate = preflight.Preflight(self.review, self.provider())
             phrase = gate.prepare()
             def mutate(value):
                 record = value['records'][0]
                 if case == 'tag':
                     record['recordChangeTag'] = 'new-tag'
+                elif case in ('asset_preview', 'master_preview', 'missing_preview'):
+                    owner_type = 'CPLMaster' if case == 'master_preview' else 'CPLAsset'
+                    owner = next(item for item in value['records'] if item['recordType'] == owner_type
+                                 and 'resJPEGThumbRes' in item['fields'])
+                    if case == 'missing_preview':
+                        owner['fields'].pop('resJPEGThumbRes')
+                        owner['fields'].pop('resJPEGThumbFileType')
+                    else:
+                        owner['fields']['resJPEGThumbRes']['value']['size'] += 1
                 elif case in ('resource', 'unknown'):
                     master = next(item for item in value['records'] if item['recordType'] == 'CPLMaster')
                     if case == 'unknown':
@@ -196,7 +212,7 @@ class CloudMetadataTests(unittest.TestCase):
                 elif len(self.calls) % 9 == 3:
                     record['recordChangeTag'] = 'changed-between-passes'
             self.mutate = mutate
-            finding = 'metadata changed' if case in ('tag', 'resource') else 'unavailable or malformed'
+            finding = 'unavailable or malformed' if case in ('unknown', 'passes') else 'metadata changed'
             with self.subTest(case=case), self.assertRaisesRegex(preflight.Blocked, finding):
                 gate.confirm(phrase)
             self.assertEqual(gate.provider.requests, 18)

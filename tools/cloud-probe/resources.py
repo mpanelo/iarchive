@@ -20,6 +20,8 @@ RESOURCE_ROLES = {
     "resVidSmallRes": "preview_video",
 }
 RESOURCE_PREFIXES = tuple(field.removesuffix("Res") for field in RESOURCE_ROLES)
+PREVIEW_FIELDS = frozenset(field for field, role in RESOURCE_ROLES.items()
+                           if role in ("preview_image", "preview_video"))
 
 
 class ResourceReportBlocked(ValueError):
@@ -147,7 +149,9 @@ def build_resource_report(observation, expected_fields=None):
         if master_id in masters and len(references[master_id]) > 1:
             finding("shared_master", identity, master_id=master_id)
         for field, count in sorted(counts.items()):
-            if count > 1:
+            # Asset and master previews have separate, fully recorded owners.
+            # Repeated originals/renditions still require ownership resolution.
+            if count > 1 and field not in PREVIEW_FIELDS:
                 finding("ambiguous_resource_ownership", identity, resource_field=field)
         if identity in expected_fields:
             expected, observed = set(expected_fields[identity]), set(counts)

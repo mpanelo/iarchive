@@ -27,6 +27,7 @@ from review import serve
 class EvidenceReviewTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.ReconcileTests()
+        self.fixture.include_previews = getattr(self, 'include_previews', False)
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.root = self.fixture.root
