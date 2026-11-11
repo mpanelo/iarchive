@@ -68,6 +68,31 @@ beside all three draft copies. A receipt requires matching `receipt.json` and
 expired confirmations or failed checks stop the rehearsal. Start a new rehearsal
 after a failure; previous confirmations cannot be reused.
 
+### Check current iCloud metadata
+
+This optional read-only check requires separate account-access approval. From
+the checkout, use the pinned cloud environment and your exact album name:
+
+```sh
+uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/preflight.py --read-only-cloud --draft /path/to/draft.json --album Legoland
+```
+
+Confirm the read-only scope in Terminal, then enter credentials there. The helper
+checks the draft's account, private zone and album identity before reading photo
+metadata. It compares two matching album passes with every saved item, including
+kept items, and rehashes both local copies. Confirm the printed count and digest
+within two minutes to repeat these checks and save read-only receipts.
+
+The album is limited to 1,000 items and 50 metadata requests per check. Requests
+start at least one second apart. Throttling, incomplete results or changed
+identities, tags or resources stop the run without retrying. To reuse a previously
+authenticated session, add `--reuse-session cloud-probe-RUN_NAME`.
+
+Private metadata and session files stay under `.smoke`; receipts stay beside
+the drafts. No media is downloaded or removed. Matching metadata does not prove
+complete cloud coverage, independent drives or protection against later edits.
+The archive CLI still cannot authenticate or remove cloud items.
+
 ## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic
