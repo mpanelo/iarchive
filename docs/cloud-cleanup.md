@@ -46,7 +46,7 @@ Edits create a new draft; existing drafts are never overwritten. Superseded,
 damaged or incomplete drafts are refused. Older drafts without reopen metadata
 need a new review. Reopening never approves cloud removal.
 
-### Rehearse preflight confirmation
+### Rehearse read-only checks
 
 For a saved draft containing selected items:
 
@@ -54,19 +54,18 @@ For a saved draft containing selected items:
 python3 tools/cloud-cleanup/preflight.py --simulate --draft /path/to/draft.json
 ```
 
-The helper rehashes both copies and compares an in-memory metadata model before
-and after your confirmation. Type the printed phrase with the exact count and
-full plan digest within two minutes. A blank answer cancels.
+Answer `y` to **Run read-only check? [y/N]**. Blank input or No cancels.
+The helper then rehashes both copies and checks an in-memory metadata model
+twice automatically. Success prints **Check passed**.
 
 The model starts from the draft's recorded metadata. It does not read iCloud or
-prove current cloud coverage, drive independence or server-side race protection.
-This rehearses the checks and confirmation; it never approves removal.
+prove cloud coverage, drive independence or protection against later edits.
 
-Matching plans, confirmation intents and receipts are saved under `preflight`
-beside all three draft copies. A receipt requires matching `receipt.json` and
-`complete.json` files in every location. Partial writes, changed evidence,
-expired confirmations or failed checks stop the rehearsal. Start a new rehearsal
-after a failure; previous confirmations cannot be reused.
+Plans, check records and receipts are saved under `preflight` beside all three
+draft copies. The full plan digest stays in these files. A valid receipt requires
+matching `receipt.json` and `complete.json` in every location. Changed evidence,
+expired checks, partial saves or failed reads stop the check. Start a new check
+after a failure. These receipts never authorize removal.
 
 ### Check current iCloud metadata
 
@@ -77,16 +76,17 @@ the checkout, use the pinned cloud environment and your exact album name:
 uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/preflight.py --read-only-cloud --draft /path/to/draft.json --album Legoland
 ```
 
-Confirm the read-only scope in Terminal, then enter credentials there. The helper
-checks the draft's account, private zone and album identity before reading photo
-metadata. It compares two matching album passes with every saved item, including
-kept items, and rehashes both local copies. Confirm the printed count and digest
-within two minutes to repeat these checks and save read-only receipts.
+Answer `y` to **Run read-only check? [y/N]**, then enter any credentials in
+Terminal. This is the only confirmation. The helper checks the draft's account,
+private zone and album identity, rehashes both local copies and checks current
+metadata automatically. Each metadata snapshot uses two matching album passes,
+including kept items. Success prints **Check passed** and saves read-only receipts.
 
-The album is limited to 1,000 items and 50 metadata requests per check. Requests
-start at least one second apart. Throttling, incomplete results or changed
-identities, tags or resources stop the run without retrying. To reuse a previously
-authenticated session, add `--reuse-session cloud-probe-RUN_NAME`.
+The album is limited to 1,000 items. Each of the two metadata snapshots permits
+at most 50 queries. Requests start at least one second apart. Throttling,
+incomplete results or changed identities, tags or resources stop the run without
+retrying. To reuse a previously authenticated session, add
+`--reuse-session cloud-probe-RUN_NAME`.
 
 Private metadata and session files stay under `.smoke`; receipts stay beside
 the drafts. No media is downloaded or removed. Matching metadata does not prove

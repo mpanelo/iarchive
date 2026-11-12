@@ -108,6 +108,35 @@ Live runs use `expectation_status: NOT PROVIDED`. Offline comparisons can check
 explicit expected fields; even `MATCHED OBSERVED FIELDS` proves metadata agreement
 only. Unrequested or unknown variants may remain undiscovered.
 
+## Download a captured test set
+
+This separate helper uses a completed [read-only metadata capture](../../docs/cloud-cleanup.md#check-current-icloud-metadata).
+Prepare without account access:
+
+```sh
+uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-probe/download_observed.py --baseline .smoke/cloud-probe-example/metadata-1-private.json --album 'Synthetic test album'
+```
+
+After separate approval for the exact account, album and downloads, add `--live`
+and answer `y` to **Download these resources? [y/N]**. The album, resource
+count, total bytes and destination appear before the question. Blank input or
+No cancels before account access. The capture digest stays in the saved
+provenance. Credentials stay in Terminal. Add
+`--reuse-session cloud-probe-RUN_NAME` to reuse a previously authenticated
+private session.
+
+Limits: five items, 21 resources, 32 MiB each and 64 MiB total. Every captured
+resource is included, including separately owned previews. Changed metadata,
+missing resources, redirects, throttling or uncertain replies stop the run.
+Requests start at least one second apart; there are no automatic retries.
+
+The fresh `.smoke` run keeps `copy-a`, `copy-b`, resource reports and download
+provenance. Completion requires matching metadata passes before and after,
+independent SHA-256 reads of both copies, a completed download manifest and
+`complete.json`. Interrupted runs remain incomplete; do not resume them.
+These local copies do not prove separate physical drives or complete cloud
+coverage. This helper never modifies Photos or approves removal.
+
 ## Investigate a change feed
 
 This scope reads beyond an album. Agree on the account and entire private zone

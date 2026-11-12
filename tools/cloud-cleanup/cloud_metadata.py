@@ -19,6 +19,7 @@ from probe import (PIN, authenticated_account, discover_zones, new_run, reuse_co
                    save_new, verify_second_factor)
 from resources import build_resource_report
 from prototype import Blocked, canonical
+from prompts import confirm
 
 
 SOURCE = 'READ_ONLY_ICLOUD'
@@ -132,10 +133,10 @@ def authenticate(draft, album, reuse_session=None):
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise Blocked('Read-only cloud preflight requires your interactive Terminal')
     require_provider()
-    print('Read-only scope: authenticate, discover library zones, locate the named album, and compare its metadata twice.')
+    print(f'Album: {album}; {len(draft["assets"])} recorded items.')
+    print('Read-only scope: authenticate, discover library zones and compare the album metadata.')
     print('No media downloads or changes. Requests start at least one second apart; throttling stops the run.')
-    if input('Type READ ONLY PREFLIGHT to authenticate: ').strip() != 'READ ONLY PREFLIGHT':
-        raise Blocked('Scope confirmation did not match; no authentication attempted')
+    confirm('Run read-only check?')
     old_mask, old_logging = os.umask(0o077), logging.root.manager.disable
     run, provider, service = None, None, None
     summary = {'schema': 1, 'provider_version': PIN, 'authenticated': False,

@@ -1,6 +1,6 @@
 """Exercise real metadata transport and saved drafts without network access."""
 
-from contextlib import nullcontext, redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 import copy
 import io
 import json
@@ -18,6 +18,7 @@ import cloud_metadata as cloud
 import conflict
 import preflight
 import test_prepare_review as fixtures
+from prompts import Cancelled
 from probe import PIN
 import test_album as album
 
@@ -92,21 +93,21 @@ class CloudMetadataTests(unittest.TestCase):
         response.request, response.url = request, request.url
         return response
 
-    def test_fresh_metadata_confirms_saved_draft(self):
+    def test_fresh_metadata_checks_saved_draft(self):
         provider = self.provider()
         provider.output = self.fixture.root / 'metadata'
         provider.output.mkdir()
         gate = preflight.Preflight(self.review, provider)
-        phrase = gate.prepare()
-        self.assertTrue(phrase.startswith('CONFIRM READ ONLY PREFLIGHT 1 '))
-        receipt = gate.confirm(phrase)
+        plan = gate.prepare()
+        self.assertEqual(plan.data()['count'], 1)
+        receipt = gate.finish(plan)
         previews = [resource for resource in gate.plan.data()['targets'][0]['resources']
                     if resource['resource_field'] == 'resJPEGThumbRes']
         self.assertEqual(len(previews), 2)
         self.assertEqual({item['resource_record_type'] for item in previews}, {'CPLAsset', 'CPLMaster'})
         self.assertEqual(len({item['relative_path'] for item in previews}), 2)
         self.assertEqual(len({item['recorded_sha256'] for item in previews}), 2)
-        self.assertEqual(receipt['result'], 'READ_ONLY_CHECK_CONFIRMED')
+        self.assertEqual(receipt['result'], 'READ_ONLY_CHECK_PASSED')
         self.assertEqual(receipt['provider_metadata'], 'OBSERVED ICLOUD METADATA MATCHED')
         self.assertFalse(receipt['limits']['removal_approved'])
         self.assertEqual(receipt['limits']['server_version_condition'], 'NOT VERIFIED')
@@ -186,10 +187,10 @@ class CloudMetadataTests(unittest.TestCase):
                 finally:
                     self.service.data['dsInfo']['dsid'] = 'synthetic-account'
 
-    def test_changed_metadata_blocks_confirmation(self):
+    def test_changed_metadata_blocks_completion(self):
         for case in ('tag', 'resource', 'asset_preview', 'master_preview', 'missing_preview', 'unknown', 'passes'):
             gate = preflight.Preflight(self.review, self.provider())
-            phrase = gate.prepare()
+            plan = gate.prepare()
             def mutate(value):
                 record = value['records'][0]
                 if case == 'tag':
@@ -214,17 +215,17 @@ class CloudMetadataTests(unittest.TestCase):
             self.mutate = mutate
             finding = 'unavailable or malformed' if case in ('unknown', 'passes') else 'metadata changed'
             with self.subTest(case=case), self.assertRaisesRegex(preflight.Blocked, finding):
-                gate.confirm(phrase)
+                gate.finish(plan)
             self.assertEqual(gate.provider.requests, 18)
             self.assertFalse(any((output / 'receipt.json').exists() for output in gate.outputs))
             self.mutate = None
 
     def test_authentication_requires_interactive_opt_in(self):
-        for tty, answer in ((False, 'READ ONLY PREFLIGHT'), (True, 'wrong')):
+        for tty, answer, rejection in ((False, 'y', cloud.Blocked), (True, '', Cancelled), (True, 'no', Cancelled), (True, 'wrong', Cancelled)):
             with self.subTest(tty=tty), patch.object(sys.stdin, 'isatty', return_value=tty), \
                     patch.object(sys.stderr, 'isatty', return_value=tty), patch('builtins.input', return_value=answer), \
                     patch.object(cloud.getpass, 'getpass') as credentials, redirect_stdout(io.StringIO()), \
-                    self.assertRaises(preflight.Blocked):
+                    self.assertRaises(rejection):
                 with cloud.authenticate(self.data, album.NAME):
                     self.fail('Authentication should be refused')
             credentials.assert_not_called()
@@ -241,7 +242,7 @@ class CloudMetadataTests(unittest.TestCase):
             zones = {**self.zones, 'shared': []}
             with self.subTest(case=case), patch.object(sys.stdin, 'isatty', return_value=True), \
                     patch.object(sys.stderr, 'isatty', return_value=True), \
-                    patch('builtins.input', return_value='READ ONLY PREFLIGHT'), \
+                    patch('builtins.input', return_value='y') as choice, \
                     patch.object(cloud.getpass, 'getpass', return_value='local@example.test'), \
                     patch.object(cloud, 'new_run', return_value=run), \
                     patch('pyicloud_ipd.PyiCloudService', return_value=self.service) as constructor, \
@@ -255,6 +256,8 @@ class CloudMetadataTests(unittest.TestCase):
                     with self.assertRaises(preflight.Blocked):
                         with cloud.authenticate(self.data, album.NAME):
                             self.fail('Wrong scope must stop')
+                self.assertEqual(choice.call_count, 1)
+                self.assertEqual(choice.call_args.args[0], 'Run read-only check? [y/N] ')
                 self.assertEqual(constructor.call_count, 1)
                 self.assertEqual(discover.call_count, 0 if case == 'account' else 1)
             summary = json.loads((run / 'summary.json').read_text())
@@ -262,22 +265,29 @@ class CloudMetadataTests(unittest.TestCase):
             self.assertEqual(summary['metadata_requests'], 0)
             self.assertNotIn('local@example.test', json.dumps(summary))
 
-    def test_cloud_cli_confirms_or_cancels(self):
+    def test_cloud_cli_checks_or_cancels(self):
         draft = str(Path(self.data['outputs'][0]) / 'draft.json')
-        for case in ('confirm', 'cancel'):
+        for case in ('check', 'cancel'):
             provider, output = self.provider(), io.StringIO()
+            @contextmanager
+            def connection(*_args):
+                cloud.confirm('Run read-only check?')
+                yield provider
             def answer(prompt):
-                self.assertTrue(prompt.startswith('Type CONFIRM READ ONLY PREFLIGHT 1 '))
-                return prompt[len('Type '):-len(': ')] if case == 'confirm' else ''
+                self.assertEqual(prompt, 'Run read-only check? [y/N] ')
+                self.assertEqual(provider.reads, 0)
+                return 'y' if case == 'check' else ''
             with self.subTest(case=case), patch.object(sys, 'argv', ['preflight.py', '--read-only-cloud', '--draft', draft,
                                                                     '--album', album.NAME]), \
-                    patch.object(preflight, 'authenticate', return_value=nullcontext(provider)) as authenticate, \
-                    patch('builtins.input', side_effect=answer), redirect_stdout(output):
+                    patch.object(preflight, 'authenticate', side_effect=connection) as authenticate, \
+                    patch('builtins.input', side_effect=answer) as choice, redirect_stdout(output):
                 self.assertEqual(preflight.main(), 0)
             authenticate.assert_called_once_with(self.data, album.NAME, None)
-            self.assertEqual(provider.reads, 2 if case == 'confirm' else 1)
-            self.assertIn('READ_ONLY_CHECK_CONFIRMED' if case == 'confirm' else 'Cancelled', output.getvalue())
+            self.assertEqual(choice.call_count, 1)
+            self.assertEqual(provider.reads, 2 if case == 'check' else 0)
+            self.assertIn('Check passed' if case == 'check' else 'Cancelled', output.getvalue())
             self.assertNotIn('SECRET', output.getvalue())
+            self.assertNotIn(self.review.current.sha256, output.getvalue())
 
 
 if __name__ == '__main__':

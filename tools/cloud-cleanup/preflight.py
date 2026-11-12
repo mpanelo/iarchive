@@ -13,10 +13,11 @@ import uuid
 from prepare_review import ERRORS, ReviewDraft, evidence
 from prototype import Blocked, Plan, canonical, digest, safe_path, write_new
 from cloud_metadata import CloudMetadata, SOURCE, authenticate
+from prompts import Cancelled, confirm
 
 
 MODE = 'SIMULATED_REVIEW_PREFLIGHT'
-CONFIRM_SECONDS = 120
+CHECK_SECONDS = 120
 LIMITS = {'live_execution': 'UNAVAILABLE', 'removal_approved': False,
           'cloud_coverage': 'NOT VERIFIED', 'physical_drive_independence': 'NOT VERIFIED',
           'content_relationships': 'NOT VERIFIED', 'server_version_condition': 'NOT VERIFIED'}
@@ -65,7 +66,7 @@ class Preflight:
             raise Blocked('Preflight requires an exact saved review draft')
         self.session, self.provider, self.draft = session, provider, session.current
         if not self.draft.data()['selected']:
-            raise Blocked('Nothing is selected; a keep-all draft needs no confirmation')
+            raise Blocked('Nothing is selected; a keep-all draft needs no preflight')
         self.cloud = type(provider) is CloudMetadata
         self.mode = 'READ_ONLY_REVIEW_PREFLIGHT' if self.cloud else MODE
         self.expected_metadata = canonical(ordered(metadata_for(self.draft.data(), SOURCE if self.cloud else 'IN_MEMORY_MOCK')))
@@ -107,7 +108,7 @@ class Preflight:
 
     def unexpired(self):
         if time.monotonic() >= self.deadline:
-            raise Blocked('Preflight confirmation expired; prepare a new preflight')
+            raise Blocked('Preflight check expired; prepare a new preflight')
 
     def prepare(self):
         if self.phase != 'new':
@@ -126,56 +127,50 @@ class Preflight:
                 outputs.append(output)
             self.outputs = tuple(outputs)
             now = datetime.now(timezone.utc)
-            self.deadline = time.monotonic() + CONFIRM_SECONDS
-            payload = {'schema': 1, 'mode': self.mode, 'limits': dict(LIMITS), 'nonce': name,
+            self.deadline = time.monotonic() + CHECK_SECONDS
+            payload = {'schema': 2, 'mode': self.mode, 'limits': dict(LIMITS), 'nonce': name,
                        'draft_sha256': self.draft.sha256, 'scope': data['scope'],
                        'targets': [asset for asset in data['assets'] if asset['id'] in data['selected']],
                        'kept': data['kept'], 'count': data['count'], 'bytes': data['bytes'],
                        'input_sha256': data['input_sha256'], 'root_identities': data['root_identities'],
                        'metadata_sha256': digest(json.loads(self.expected_metadata)),
-                       'created_at': now.isoformat(), 'expires_at': (now + timedelta(seconds=CONFIRM_SECONDS)).isoformat(),
+                       'created_at': now.isoformat(), 'expires_at': (now + timedelta(seconds=CHECK_SECONDS)).isoformat(),
                        'outputs': list(map(str, self.outputs))}
             self.plan = Plan(canonical(payload), digest(payload))
             self.publish('plan.json', {'payload': self.plan.payload, 'sha256': self.plan.sha256})
             self.check_selection()
             self.unexpired()
             self.phase = 'prepared'
-            return self.phrase()
+            return self.plan
         except (*ERRORS, KeyboardInterrupt):
             self.phase = 'blocked'
             raise
 
-    def phrase(self):
+    def finish(self, expected_plan):
+        """Complete the prepared read-only check with its internally bound plan."""
         if self.phase != 'prepared':
-            raise Blocked('No current preflight confirmation is available')
-        prefix = 'CONFIRM READ ONLY PREFLIGHT' if self.cloud else 'SIMULATE PREFLIGHT'
-        return f"{prefix} {self.plan.data()['count']} {self.plan.sha256}"
-
-    def confirm(self, answer):
-        if self.phase != 'prepared':
-            raise Blocked('This preflight is closed; confirmations cannot be reused')
-        expected_phrase = self.phrase()
+            raise Blocked('This preflight is closed; checks cannot be reused')
         self.phase = 'checking'
         try:
             self.unexpired()
-            if answer != expected_phrase:
-                raise Blocked('Exact preflight count and full digest must be confirmed')
+            if type(expected_plan) is not Plan or expected_plan != self.plan:
+                raise Blocked('Preflight plan changed; prepare a new check')
             envelope = {'payload': self.plan.payload, 'sha256': self.plan.sha256}
             self.check_copies('plan.json', envelope)
             if any(os.path.lexists(output / name) for output in self.outputs
                    for name in ('intent.json', 'receipt.json', 'complete.json')):
-                raise Blocked('This preflight was already used; never reuse its confirmation')
+                raise Blocked('This preflight was already used; prepare a new check')
             self.refresh()
             self.unexpired()
             intent = {'plan_sha256': self.plan.sha256, 'draft_sha256': self.draft.sha256,
-                      'confirmed_at': datetime.now(timezone.utc).isoformat(), 'mode': self.mode}
+                      'check_started_at': datetime.now(timezone.utc).isoformat(), 'mode': self.mode}
             self.publish('intent.json', intent)
             self.check_selection()
             self.check_copies('plan.json', envelope)
             self.check_copies('intent.json', intent)
             self.unexpired()
             receipt = {**intent, 'count': self.plan.data()['count'], 'bytes': self.plan.data()['bytes'],
-                       'result': 'READ_ONLY_CHECK_CONFIRMED' if self.cloud else 'SIMULATION_CONFIRMED',
+                       'result': 'READ_ONLY_CHECK_PASSED' if self.cloud else 'SIMULATED_CHECK_PASSED',
                        'local_bytes': 'FRESHLY HASHED FOR THIS CHECK',
                        'provider_metadata': 'OBSERVED ICLOUD METADATA MATCHED' if self.cloud else 'MOCK MATCHED', 'limits': dict(LIMITS)}
             self.publish('receipt.json', receipt)
@@ -184,7 +179,7 @@ class Preflight:
             self.check_copies('receipt.json', receipt)
             self.check_copies('complete.json', completion)
             self.check_selection()
-            self.phase = 'confirmed'
+            self.phase = 'passed'
             return receipt
         except (*ERRORS, KeyboardInterrupt):
             self.phase = 'blocked'
@@ -207,27 +202,29 @@ def main():
         data = session.current.data()
         if not data['selected']:
             raise Blocked('Nothing is selected; cloud authentication is unnecessary')
+        approved_draft = session.current
+        print('Read-only iCloud check. Cloud removal is unavailable.' if args.read_only_cloud else
+              'Offline preflight rehearsal. Provider metadata is an in-memory model; cloud removal is unavailable.')
+        resources = sum(len(asset['resources']) for asset in data['assets'] if asset['id'] in data['selected'])
+        print(f"Selected: {data['count']} items; {resources} resources; {data['bytes']:,} bytes.")
+        if not args.read_only_cloud:
+            confirm('Run read-only check?')
         context = authenticate(data, args.album, args.reuse_session) if args.read_only_cloud else nullcontext(MockMetadata(data))
         with context as provider:
+            if session.current != approved_draft:
+                raise Blocked('Review selection changed after the check was requested')
             gate = Preflight(session, provider)
-            phrase = gate.prepare()
-            print('Read-only iCloud preflight. Cloud removal is unavailable.' if gate.cloud else
-                  'Offline preflight rehearsal. Provider metadata is an in-memory model; cloud removal is unavailable.')
-            print(f"Selected: {gate.plan.data()['count']} items; {gate.plan.data()['bytes']:,} resource bytes.")
-            print('Confirmation expires after two minutes. Nothing will be removed.')
-            answer = input(f'Type {phrase}: ').strip()
-            if not answer:
-                gate.phase = 'cancelled'
-                print('Cancelled. No confirmation receipt was saved.')
-                return 0
-            result = gate.confirm(answer)
-            print('Preflight check confirmed. Receipts saved in all three locations:')
+            plan = gate.prepare()
+            gate.finish(plan)
+            print('Check passed. Read-only receipts saved in all three locations:')
             for output in gate.outputs:
                 print(output)
-            print(json.dumps(result, sort_keys=True))
             return 0
+    except Cancelled:
+        print('Cancelled. No new check receipt was saved.')
+        return 0
     except (*ERRORS, KeyboardInterrupt, EOFError):
-        print('Preflight stopped. Check the draft, evidence and copies; start a new preflight before confirming again.', file=sys.stderr)
+        print('Check stopped. Check the draft, evidence and copies; prepare a new preflight before trying again.', file=sys.stderr)
         return 1
 
 
