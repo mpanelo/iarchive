@@ -73,7 +73,7 @@ This optional read-only check requires separate account-access approval. From
 the checkout, use the pinned cloud environment and your exact album name:
 
 ```sh
-uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/preflight.py --read-only-cloud --draft /path/to/draft.json --album Legoland
+uv run --locked --project tools/cloud-probe --python 3.12 python tools/cloud-cleanup/preflight.py --read-only-cloud --draft /path/to/draft.json --album 'Your album name'
 ```
 
 Answer `y` to **Run read-only check? [y/N]**, then enter any credentials in

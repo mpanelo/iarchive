@@ -107,9 +107,9 @@ mismatches. Source bytes/timestamps and retained partial hashes stayed unchanged
 Raw reports remain local and untracked:
 
 ```text
-.smoke/windows-369ce8fb6d6740a68b9d5c77b5db9ad7/
-.smoke/two-drive-b583cc97b7f846c19693aaabd4ca891a/
-.smoke/two-drive-interruption-6b4e4d894808465bbd29f354844737cf/
+.smoke/windows-<run-id>/
+.smoke/two-drive-<run-id>/
+.smoke/two-drive-interruption-<run-id>/
 ```
 
 ### macOS gallery and script checks — 2026-10-11

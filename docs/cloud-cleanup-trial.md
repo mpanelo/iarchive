@@ -63,6 +63,14 @@ quota or claim reclaimed space. Never empty Recently Deleted for this trial.
 Both local files are on one filesystem, so this does not establish independent
 backups or authorize cleanup of real archives.
 
+## Read-only Favorite-change check
+
+One macOS check on November 12, 2026 (UTC) compared fresh metadata with a saved
+five-item review after a Favorite change. One asset change tag differed, so the
+check stopped before writing a plan or receipt. It made one metadata snapshot
+(9 requests), downloaded no media and made no Photos changes. The saved review
+remained unchanged.
+
 ## Check restored JPEG bytes
 
 Prepare a read-only follow-up from the completed trial run:
