@@ -377,6 +377,23 @@ do not establish deletion behavior or general concurrency guarantees.
 The separate [one-photo trial](../../docs/cloud-cleanup-trial.md#recorded-result)
 records the soft-delete and manual-restoration result, including remaining gaps.
 
+### Stale-tag soft-delete check
+
+For the separately approved deletion-race check, add `--stale-tag-delete --live`
+to the one-photo trial command above. Start with Favorite on. After the helper
+captures the asset tag, turn Favorite off and back on for that photo only, then
+answer `y` after it syncs. Each confirmation uses `[y/N]`; Enter cancels.
+The helper verifies the new tag and asks before sending at most
+one soft-delete request with the earlier tag. It never purges or retries.
+
+A `CONFLICT` counts only when a fresh lookup and album capture confirm the item
+stayed active. If the update is accepted, the item moves to Recently Deleted;
+restore it manually and let the helper recheck its metadata and preserved local bytes.
+Unknown results require manual inspection. This single-item experiment does not
+prove general deletion safety.
+
+This mode allows at most five paired asset/master lookups and one original GET.
+
 ## Concurrency decision
 
 The bounded offline review on October 17, 2026 found no additional enforceable
@@ -390,7 +407,7 @@ can miss concurrent changes, and the provider's version map omits some resources
 
 | Mechanism | Finding |
 | --- | --- |
-| `update` with `recordChangeTag` | Already present in the pinned removal request. Both Favorite trials accepted an older tag. Rejection of stale deletion tags remains unverified. |
+| `update` with `recordChangeTag` | Both Favorite trials and one soft-delete accepted an older tag. See the [stale-tag result](../../docs/cloud-cleanup-trial.md#stale-tag-jpeg). This tag cannot serve as our deletion concurrency guard. |
 | `atomic: true` | Groups submitted operations; it does not condition a write on omitted master/resource records or the whole inventory. |
 | Change-feed `syncToken` | A read checkpoint. The documented modification request has no whole-zone token condition. `getCurrentSyncToken: true` did not prevent the observed stale Favorite update. |
 | `replace` or `delete` | Different mutations, not extra guards for the Photos `isDeleted` update. Replacing can clear omitted fields; deleting a CloudKit record does not establish Photos removal or recovery behavior. |

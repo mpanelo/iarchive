@@ -23,16 +23,18 @@ directory under `.smoke`. No authentication or cloud requests occur.
 Only after agreeing on the main account, album and exact disposable item, add
 `--live` to that same command. The trial:
 
-1. Asks for `ONE DISPOSABLE PHOTO TRIAL` before local authentication.
+1. Explains the scope and asks `[y/N]` before local authentication.
 2. Checks the five-item album and exact account, zone, asset and master IDs.
 3. Downloads that original once and requires its SHA-256 to match the saved JPEG.
-4. Rechecks metadata and local originals, then prints a one-item confirmation
-   containing the full plan digest. Confirming permits one removal request.
+4. Rechecks metadata and local originals, then asks `[y/N]` before one removal
+   request. This confirmation expires after two minutes.
 5. Checks the soft-delete flag and four remaining album items.
-6. Asks you to find the blue image in Recently Deleted and type
-   `SEEN IN RECENTLY DELETED`.
-7. Asks you to restore it manually and type `RESTORED ONE PHOTO`, then checks
+6. Asks whether you can see the synthetic photo in Recently Deleted.
+7. Asks you to restore it manually and confirm with `[y/N]`, then checks
    its identity, album membership and resource metadata again.
+
+Answer `y` or `yes` to continue. Enter, any other answer or Ctrl+C stops the
+trial. The plan digest stays in the private evidence; you do not need to type it.
 
 Keep the selected image unchanged during the trial. Removal affects synced
 devices. A preflight check cannot prevent a change immediately before the write.
@@ -154,6 +156,23 @@ original once. Its SHA-256 matched the synthetic source and preserved pre-remova
 copies. One asset/master lookup and before/after album captures matched the saved
 restoration metadata; zero cloud modifications occurred. An independent offline
 check confirmed the saved bindings, report digests and local hashes.
+
+### Stale-tag JPEG
+
+One approved macOS trial on November 12, 2026 (UTC) cycled Favorite off and on,
+advancing only the synthetic JPEG's asset tag. A single soft-delete request using
+the earlier tag was **accepted**, and a fresh lookup confirmed removal.
+
+The trial used one original download and five asset/master lookups. After manual
+restoration, the album count returned **5 → 4 → 5**; the other four items stayed
+unchanged. Restored identity and resource metadata matched, and all three local
+original copies retained their SHA-256 hashes. The saved plan and durable intent
+matched the request and its earlier tag. An independent offline check confirmed
+these bindings, album records and local hashes. This trial did not download the
+restored cloud original; Recently Deleted visibility was user-reported.
+
+The stale asset tag did not prevent deletion in this test. It cannot serve as
+our deletion concurrency guard. Automated archive cleanup remains unavailable.
 
 ### Live Photo
 

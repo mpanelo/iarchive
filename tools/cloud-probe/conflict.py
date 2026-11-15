@@ -245,6 +245,7 @@ class Exchange:
         self.service, self.root, self.pacer = service, root.rstrip("/"), pacer
         self.binding = json.loads(canonical(binding))
         self.lookups = self.writes = 0
+        self.lookup_limit = 1 if metadata_only else 3
         self.update_body = None
         self.summary = summary
         self.metadata_only = metadata_only
@@ -280,7 +281,7 @@ class Exchange:
             raise ConflictBlocked("Updates are forbidden in metadata-only mode")
         if kind not in ("lookup", "modify"):
             raise ConflictBlocked("Unsupported experiment request")
-        if (kind == "lookup" and self.lookups >= (1 if self.metadata_only else 3)) or (
+        if (kind == "lookup" and self.lookups >= self.lookup_limit) or (
                 kind == "modify" and (self.writes or self.update_body is None)):
             raise ConflictBlocked("Experiment request budget exhausted")
         body = canonical(self.lookup_body()) if kind == "lookup" else self.update_body

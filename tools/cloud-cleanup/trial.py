@@ -21,6 +21,7 @@ from conflict import (
 )
 from originals import valid_media_url
 from resources import RESOURCE_ROLES
+from prompts import Cancelled, confirm
 from probe import (
     PIN, ProbeBlocked, authenticated_account, discover_zones, new_run, reuse_cookies,
     save_new, verify_second_factor,
@@ -28,7 +29,6 @@ from probe import (
 
 
 MAX_ORIGINAL = 1024 * 1024
-SCOPE_PHRASE = "ONE DISPOSABLE PHOTO TRIAL"
 LIMITS = {"archive_cleanup_enabled": False, "physical_drive_independence": "NOT VERIFIED",
           "whole_library_coverage": "NOT VERIFIED", "atomic_version_protection": "NOT VERIFIED",
           "resource_completeness": "NOT VERIFIED", "relation_target_binding": "NOT VERIFIED",
@@ -72,7 +72,7 @@ def save_bytes(path, value):
         os.fsync(stream.fileno())
 
 
-def prepare(repo, evidence_path, baseline_name, run):
+def prepare(repo, evidence_path, baseline_name, run, stale_tag_delete=False):
     binding, baseline = load_experiment(repo, evidence_path, baseline_name)
     evidence, _ = read_report(repo, evidence_path)
     source = Path(os.path.abspath(evidence_path)).parent / binding["fixture_file"]
@@ -87,7 +87,8 @@ def prepare(repo, evidence_path, baseline_name, run):
     save_bytes(run / "recovery-original.jpg", value)
     if original_bytes(repo, run / "recovery-original.jpg") != value:
         raise TrialBlocked("Recovery copy did not match the synthetic original")
-    save_new(run / "offline-plan-private.json", {"schema": 1, "scope": "one_disposable_jpeg",
+    save_new(run / "offline-plan-private.json", {"schema": 1,
+             "scope": "one_stale_tag_delete" if stale_tag_delete else "one_disposable_jpeg",
              "binding": binding, "limits": LIMITS, "live_trial_authorized": False})
     return binding, baseline
 
@@ -151,14 +152,23 @@ def comparable_pair(pair):
 class TrialWire(Exchange):
     """Reuse bounded transport, narrowing writes to one exact soft-delete update."""
 
+    def __init__(self, service, root, binding, pacer, summary=None, *, stale_tag_delete=False,
+                 metadata_only=False):
+        super().__init__(service, root, binding, pacer, summary, metadata_only=metadata_only)
+        self.stale_tag_delete = stale_tag_delete
+        self.lookup_limit = 1 if metadata_only else 5 if stale_tag_delete else 3
+        self.favorite_value = None
+
     def lookup_body(self):
+        stale_tag_delete = getattr(self, "stale_tag_delete", False)
         return {"records": [{"recordName": self.binding[key]} for key in ("asset_id", "master_id")],
-                "zoneID": self.binding["zone_id"], "desiredKeys": sorted(CORE_KEYS | RESOURCE_KEYS)}
+                "zoneID": self.binding["zone_id"],
+                "desiredKeys": sorted(CORE_KEYS | RESOURCE_KEYS | ({"isFavorite"} if stale_tag_delete else set()))}
 
     def freeze_update(self, *_args):
         raise TrialBlocked("Favorite and arbitrary updates are unavailable in this trial")
 
-    def freeze_removal(self, pair):
+    def freeze_removal(self, pair, stale_tag=None):
         if self.update_body is not None or self.writes:
             raise TrialBlocked("Only one removal can be prepared")
         validate_original(pair, self.binding)
@@ -168,10 +178,15 @@ class TrialWire(Exchange):
                 or asset["fields"].get("masterRef") != {"recordName": self.binding["master_id"]}
                 or any(r["fields"].get("isDeleted") == 1 for r in pair.values())):
             raise TrialBlocked("The exact active synthetic asset is required")
+        record_tag = asset["recordChangeTag"]
+        if stale_tag is not None:
+            if not self.stale_tag_delete or not text(stale_tag) or stale_tag == record_tag:
+                raise TrialBlocked("A distinct captured asset tag is required for the stale-tag test")
+            record_tag = stale_tag
         self.update_body = canonical({"atomic": True, "desiredKeys": ["isDeleted"],
             "zoneID": self.binding["zone_id"], "operations": [{"operationType": "update", "record": {
                 "recordName": self.binding["asset_id"], "recordType": "CPLAsset",
-                "recordChangeTag": asset["recordChangeTag"], "fields": {"isDeleted": {"value": 1}}}}]})
+                "recordChangeTag": record_tag, "fields": {"isDeleted": {"value": 1}}}}]})
         self.removal_body = self.update_body
         return json.loads(self.update_body)
 
@@ -199,6 +214,13 @@ class TrialWire(Exchange):
                 raise TrialBlocked("Lookup returned a different, missing or purged record")
             by_id[record["recordName"]] = record
         pair = {key: safe_record(by_id[self.binding[key + "_id"]]) for key in ("asset", "master")}
+        if self.stale_tag_delete:
+            fields = by_id[self.binding["asset_id"]].get("fields")
+            favorite = fields.get("isFavorite") if isinstance(fields, dict) else None
+            value = favorite.get("value") if isinstance(favorite, dict) else None
+            if type(value) is not int or value not in (0, 1):
+                raise TrialBlocked("Favorite value is missing or ambiguous for the stale-tag test")
+            self.favorite_value = value
         validate_original(pair, self.binding)
         if pair["asset"]["fields"].get("masterRef") != {"recordName": self.binding["master_id"]}:
             raise TrialBlocked("Lookup master reference changed")
@@ -316,8 +338,9 @@ def verify_preserved(repo, binding, run, downloaded=False):
             raise TrialBlocked("A preserved original changed; no removal is allowed")
 
 
-def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, summary):
-    wire = TrialWire(service, root, binding, pacer, summary)
+def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, summary,
+              stale_tag_delete=False):
+    wire = TrialWire(service, root, binding, pacer, summary, stale_tag_delete=stale_tag_delete)
     summary["phase"] = "before_metadata"
     before = capture(service, root, zones, name, binding, pacer, run, "before", 5)
     if not same_album(baseline, before, binding["asset_id"], ignore_all_tags=True):
@@ -337,19 +360,45 @@ def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, s
             or canonical(fresh) != canonical(pair)
             or not same_album(before, preflight, binding["asset_id"])):
         raise TrialBlocked("Target or album changed while preserving the original")
-    request = wire.freeze_removal(fresh)
+    stale_tag = None
+    cycle_album = preflight
+    if stale_tag_delete:
+        if wire.favorite_value != 1:
+            raise TrialBlocked("Favorite must be on before the stale-tag test")
+        stale_tag = fresh["asset"]["recordChangeTag"]
+        print("Turn Favorite off then back on for only the synthetic JPEG; leave it on.")
+        confirm("Have you turned Favorite off and back on for that photo and waited for sync?")
+        summary["phase"] = "favorite_cycle"
+        cycle_album = capture(service, root, zones, name, binding, pacer, run, "cycled", 5)
+        cycled, _ = wire.lookup()
+        if (wire.favorite_value != 1
+                or cycled["asset"]["recordChangeTag"] == stale_tag
+                or cycled["master"]["recordChangeTag"] != fresh["master"]["recordChangeTag"]
+                or canonical(cycled) != canonical(target_pair(cycle_album, binding))
+                or not same_album(preflight, cycle_album, binding["asset_id"])
+                or comparable_pair(cycled) != comparable_pair(fresh)):
+            raise TrialBlocked("Favorite cycle did not change only the target asset tag; no removal request sent")
+        fresh = cycled
+    request = wire.freeze_removal(fresh, stale_tag=stale_tag)
     plan = {"schema": 1, "binding": binding, "request": request, "original_sha256": binding["fixture_sha256"],
             "preflight_sha256": hashlib.sha256(canonical(preflight).encode()).hexdigest(),
-            "photo_query_flags": dict(wire.query_flags), "limits": LIMITS}
+            "photo_query_flags": dict(wire.query_flags), "stale_tag_delete": stale_tag_delete,
+            "captured_asset_tag": stale_tag or fresh["asset"]["recordChangeTag"],
+            "current_asset_tag": fresh["asset"]["recordChangeTag"], "limits": LIMITS}
     plan_hash = hashlib.sha256(canonical(plan).encode()).hexdigest()
     save_new(run / "remove-plan-private.json", plan)
-    phrase = f"REMOVE ONE TEST PHOTO {plan_hash}"
-    print("Only the blue synthetic JPEG is selected. This affects synced devices; version races remain possible.")
+    print("Only the upload-evidence-bound synthetic JPEG is selected. This affects synced devices.")
+    if stale_tag_delete:
+        print("The single soft-delete request will use the asset tag captured before the Favorite cycle.")
+    else:
+        print("Version races remain possible.")
     print("No purge, automatic restoration or write retry. Local originals are preserved.")
     summary["phase"] = "confirmation"
     ready = time.monotonic()
-    if input(f"Type {phrase} to send once: ").strip() != phrase or time.monotonic() - ready > 120:
-        raise TrialBlocked("Removal confirmation did not match or expired; no write sent")
+    confirm("Send one soft-delete request for this synthetic photo using its earlier tag?" if stale_tag_delete
+            else "Move this one synthetic photo to Recently Deleted?")
+    if time.monotonic() - ready > 120:
+        raise TrialBlocked("Removal confirmation expired; no write sent")
     verify_preserved(repo, binding, run, downloaded=True)
     saved, _ = read_report(repo, run / "remove-plan-private.json")
     if canonical(saved) != canonical(plan):
@@ -367,7 +416,22 @@ def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, s
         save_new(run / "write-outcome-private.json", {"reply": summary["reply"], "modification_requests": wire.writes,
                  "lookup_requests": wire.lookups, "photo_query_flags": dict(wire.query_flags)})
     if summary["reply"] == "CONFLICT":
-        raise TrialBlocked("Removal was rejected; no retry")
+        if not stale_tag_delete:
+            raise TrialBlocked("Removal was rejected; no retry")
+        summary["phase"] = "stale_delete_postcheck"
+        rejected, _ = wire.lookup()
+        after = capture(service, root, zones, name, binding, pacer, run, "after-conflict", 5)
+        deleted = rejected["asset"]["fields"].get("isDeleted")
+        deleted = deleted.get("value") if isinstance(deleted, dict) else deleted
+        if (deleted not in (None, 0) or rejected["asset"]["recordChangeTag"] != fresh["asset"]["recordChangeTag"]
+                or wire.favorite_value != 1 or canonical(rejected["master"]) != canonical(fresh["master"])
+                or comparable_pair(rejected) != comparable_pair(fresh)
+                or not same_album(cycle_album, after, binding["asset_id"])
+                or canonical(rejected) != canonical(target_pair(after, binding))):
+            raise TrialBlocked("Conflict reply did not prove the synthetic photo stayed unchanged")
+        summary.update(phase="completed", stale_tag_delete_rejected=True,
+                       removal_metadata_observed=False, stale_delete_postcheck_completed=True)
+        return
     summary["phase"] = "removal_postcheck"
     removed, _ = wire.lookup()
     value = removed["asset"]["fields"].get("isDeleted")
@@ -378,11 +442,10 @@ def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, s
         raise TrialBlocked("Remaining album metadata changed; inspect manually")
     save_new(run / "removed-target-private.json", removed)
     summary.update(removal_metadata_observed=True, remaining_assets_unchanged=True)
-    if input("Check only the blue image in Recently Deleted. Type SEEN IN RECENTLY DELETED: ").strip() != "SEEN IN RECENTLY DELETED":
-        raise TrialBlocked("Recently Deleted UI observation was not confirmed")
+    confirm("Can you see this synthetic photo in Recently Deleted?")
     summary["recently_deleted_ui"] = "USER REPORTED"
-    if input("Restore that blue image manually in Photos, then type RESTORED ONE PHOTO: ").strip() != "RESTORED ONE PHOTO":
-        raise TrialBlocked("Manual restore was not confirmed")
+    print("Restore only this synthetic photo manually in Photos and wait for sync.")
+    confirm("Have you restored this photo and waited for sync?")
     summary["phase"] = "restore_postcheck"
     restored = capture(service, root, zones, name, binding, pacer, run, "restored", 5)
     restored_pair = target_pair(restored, binding)
@@ -392,8 +455,14 @@ def run_trial(repo, service, root, zones, name, binding, baseline, run, pacer, s
             or not restored_matches(before, restored, binding)):
         raise TrialBlocked("Restored identity, membership or resource metadata did not match")
     verify_preserved(repo, binding, run, downloaded=True)
+    if stale_tag_delete:
+        looked_up, _ = wire.lookup()
+        if wire.favorite_value != 1 or canonical(looked_up) != canonical(restored_pair):
+            raise TrialBlocked("Restored Favorite or asset metadata did not match")
     summary.update(phase="completed", restored_album_membership_verified=True,
                    restored_resource_metadata_matches=True, preserved_originals_unchanged=True)
+    if stale_tag_delete:
+        summary["stale_tag_delete_rejected"] = False
 
 
 def main():
@@ -403,28 +472,35 @@ def main():
     parser.add_argument("--album", required=True)
     parser.add_argument("--reuse-session")
     parser.add_argument("--live", action="store_true", help="Only after separate approval: authenticate and offer one trial request")
+    parser.add_argument("--stale-tag-delete", action="store_true",
+                        help="Test one soft-delete request with the asset tag captured before a Favorite cycle")
     args = parser.parse_args()
     run, pacer = None, None
     old_mask, old_logging = os.umask(0o077), logging.root.manager.disable
-    summary = {"schema": 1, "scope": "one_disposable_cleanup_trial", "provider_version": PIN,
+    summary = {"schema": 1,
+               "scope": "one_stale_tag_delete_trial" if args.stale_tag_delete else "one_disposable_cleanup_trial",
+               "provider_version": PIN,
                "started_at": datetime.now(timezone.utc).isoformat(), "phase": "offline_preparation",
                "authentication_attempted": False, "media_gets": 0, "lookup_requests": 0,
-               "modification_requests": 0, "research_removal_confirmed": False, "limits": dict(LIMITS)}
+               "modification_requests": 0, "research_removal_confirmed": False,
+               **({"stale_tag_delete_rejected": False} if args.stale_tag_delete else {}),
+               "limits": dict(LIMITS)}
     try:
         if version("icloudpd") != PIN:
             raise TrialBlocked("Pinned provider version is required")
         repo = Path(__file__).resolve().parents[2]
         run = new_run(repo)
-        binding, baseline = prepare(repo, args.evidence, args.baseline, run)
+        binding, baseline = prepare(repo, args.evidence, args.baseline, run, args.stale_tag_delete)
         summary["offline_prepared"] = True
         print(f"Private trial output: {run}")
         if args.live:
             if not sys.stdin.isatty() or not sys.stderr.isatty():
                 raise TrialBlocked("Live trial requires your interactive Terminal and separate approval")
-            print("Separate live approval required: five-item album metadata, one original GET and at most one removal.")
+            print("Separate live approval required: five-item album metadata, one original GET and at most one soft-delete.")
             print("Only the upload-evidence-bound synthetic JPEG. Restore manually; Recently Deleted is never emptied.")
-            if input(f"Type {SCOPE_PHRASE} to authenticate: ").strip() != SCOPE_PHRASE:
-                raise TrialBlocked("Scope confirmation did not match; no authentication attempted")
+            if args.stale_tag_delete:
+                print("This tests whether iCloud rejects a soft-delete with an earlier asset tag.")
+            confirm("Start this one-photo trial and authenticate?")
             logging.disable(logging.CRITICAL)
             from pyicloud_ipd import PyiCloudService
             pacer = Pacer()
@@ -447,11 +523,14 @@ def main():
                 zones, errors = discover_zones(service, root)
                 if errors or set(zones) != {"private", "shared"}:
                     raise TrialBlocked("Library discovery was incomplete")
-            run_trial(repo, service, root, zones, args.album, binding, baseline, run, pacer, summary)
+            run_trial(repo, service, root, zones, args.album, binding, baseline, run, pacer, summary,
+                      stale_tag_delete=args.stale_tag_delete)
         else:
             summary["phase"] = "offline_prepared"
     except (Exception, KeyboardInterrupt) as error:
         summary["blocked"] = type(error).__name__
+        if isinstance(error, Cancelled):
+            summary["finding"] = "Trial cancelled; no further requests sent"
         if isinstance(error, (TrialBlocked, ConflictBlocked, ProbeBlocked)):
             summary["finding"] = str(error)
         if isinstance(error, ChangesThrottled):
@@ -464,8 +543,12 @@ def main():
             save_new(run / "summary.json", summary)
         logging.disable(old_logging)
         os.umask(old_mask)
-    if summary["modification_requests"]:
-        print("Check Recently Deleted and restore the blue test image manually if present. Never retry an uncertain write.")
+    if summary.get("stale_tag_delete_rejected"):
+        print("The stale-tag request was rejected; fresh metadata confirms the photo stayed active.")
+    elif summary.get("restored_album_membership_verified"):
+        print("The synthetic photo was restored and its metadata was rechecked.")
+    elif summary["modification_requests"]:
+        print("Check Recently Deleted and restore the test image manually if present. Never retry an uncertain write.")
     print(json.dumps(summary, indent=2))
     return int("blocked" in summary)
 

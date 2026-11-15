@@ -50,6 +50,8 @@ class CleanupTrialTests(unittest.TestCase):
                 record["fields"]["isDeleted"] = {"value": None}
             if record["recordName"] == MASTER:
                 record["fields"]["resOriginalRes"]["value"].update(size=len(self.payload), downloadURL=MEDIA_URL)
+            if record["recordName"] == TARGET:
+                record["fields"]["isFavorite"] = {"value": 1}
         self.records += [{"recordName": "relation-" + str(n), "recordType": "CPLContainerRelation",
                           "recordChangeTag": "relation-tag", "fields": {
                               "masterRef": {"value": {"recordName": "full-master-" + str(n)}}}} for n in range(1, 6)]
@@ -80,6 +82,7 @@ class CleanupTrialTests(unittest.TestCase):
         run.mkdir()
         (run / "cookies").mkdir()
         records = copy.deepcopy(self.records)
+        stale_tag_delete = case.startswith("stale")
         state = {"removed": False, "gets": 0, "writes": 0, "calls": [], "lookups": 0}
         service = SimpleNamespace(data={"dsInfo": {"dsid": "synthetic-account"}},
             params={"dsid": "synthetic-account"}, requires_2fa=False, requires_2sa=False,
@@ -92,20 +95,32 @@ class CleanupTrialTests(unittest.TestCase):
             return [r for r in records if r["recordName"] in (TARGET, MASTER)]
 
         def answer(prompt):
-            if "authenticate:" in prompt:
-                return "NO" if case == "scope" else trial.SCOPE_PHRASE
-            if "REMOVE ONE TEST PHOTO" in prompt:
+            self.assertTrue(prompt.endswith(" [y/N] "))
+            if prompt.startswith("Start this one-photo trial"):
+                return {"scope": "n", "scopeblank": ""}.get(case, "y")
+            if prompt.startswith("Have you turned Favorite"):
+                if case == "stale_nocycle":
+                    return "n"
+                target = next(record for record in target_records() if record["recordName"] == TARGET)
+                if case != "stale_sametag":
+                    target["recordChangeTag"] = "cycled-asset"
+                target["fields"]["isFavorite"] = {"value": 0 if case == "stale_badfavorite" else 1}
+                return "y"
+            if prompt.startswith(("Move this one synthetic photo", "Send one soft-delete request")):
                 if case == "localdrift":
                     (run / "recovery-original.jpg").write_bytes(b"changed")
                 if case == "planedit":
                     (run / "remove-plan-private.json").write_text("{}")
-                self.assertTrue(prompt.startswith("Type REMOVE ONE TEST PHOTO "))
-                return "NO" if case == "refuse" else prompt[len("Type "):-len(" to send once: ")]
-            if "SEEN IN RECENTLY DELETED" in prompt:
-                return "SEEN IN RECENTLY DELETED"
-            self.assertIn("RESTORED ONE PHOTO", prompt)
+                if case == "expired":
+                    clock.monotonic.return_value = clock.monotonic() + 121
+                if case == "refuseinterrupt":
+                    raise KeyboardInterrupt
+                return {"refuse": "n", "refuseblank": "", "refuseinvalid": "sure"}.get(case, "yes")
+            if prompt.startswith("Can you see this synthetic photo"):
+                return "n" if case == "seencancel" else "y"
+            self.assertTrue(prompt.startswith("Have you restored this photo"))
             if case == "restorecancel":
-                return "NO"
+                return "n"
             state["removed"] = False
             for record in target_records():
                 record["fields"]["isDeleted"] = {"value": None}
@@ -114,7 +129,7 @@ class CleanupTrialTests(unittest.TestCase):
                 next(r for r in target_records() if r["recordName"] == MASTER)["fields"]["resOriginalRes"]["value"]["fileChecksum"] = "changed"
             if case == "restoredotherdrift":
                 next(r for r in records if r["recordName"] == "full-asset-1")["recordChangeTag"] = "unrelated-change"
-            return "RESTORED ONE PHOTO"
+            return "y"
 
         def send(adapter, request, **kwargs):
             path = urlsplit(request.url).path
@@ -156,6 +171,7 @@ class CleanupTrialTests(unittest.TestCase):
             if path.endswith("/lookup"):
                 state["lookups"] += 1
                 self.assertEqual(body["records"], [{"recordName": TARGET}, {"recordName": MASTER}])
+                self.assertEqual("isFavorite" in body["desiredKeys"], stale_tag_delete)
                 found = copy.deepcopy(target_records())
                 if case == "lookupscope":
                     found[0]["zoneID"] = {**ZONE, "ownerRecordName": "wrong"}
@@ -169,14 +185,15 @@ class CleanupTrialTests(unittest.TestCase):
             self.assertEqual(body["operations"], [{"operationType": "update", "record": {
                 "recordName": TARGET, "recordType": "CPLAsset", "recordChangeTag": "asset-tag",
                 "fields": {"isDeleted": {"value": 1}}}}])
+            self.assertEqual(intent["plan"]["stale_tag_delete"], stale_tag_delete)
             self.assertEqual((run / "recovery-original.jpg").read_bytes(), self.payload)
             self.assertEqual((run / "downloaded-original.jpg").read_bytes(), self.payload)
             state["writes"] += 1
             if case == "writethrottled":
                 return self.response(request, {"retryAfter": 27}, 429, {"Retry-After": "17"})
-            if case == "conflict":
+            if case in ("conflict", "stale_conflict"):
                 return self.response(request, {"records": [{"recordName": TARGET, "serverErrorCode": "CONFLICT"}]})
-            if case == "lostbefore":
+            if case in ("lostbefore", "stale_unknown"):
                 raise Timeout("SECRET_TIMEOUT")
             state["removed"] = True
             for record in target_records():
@@ -200,12 +217,15 @@ class CleanupTrialTests(unittest.TestCase):
 
         output = io.StringIO()
         argv = ["trial.py", "--evidence", str(self.fixture.evidence_path), "--baseline", self.fixture.baseline_name, "--album", NAME]
+        if stale_tag_delete:
+            argv.append("--stale-tag-delete")
         with PyiCloudSession(service) as session, \
                 patch("pyicloud_ipd.PyiCloudService", return_value=service) as authenticate, \
                 patch.object(HTTPAdapter, "send", autospec=True, side_effect=send), \
                 patch.object(trial, "__file__", str(self.repo / "tools/cloud-cleanup/trial.py")), \
                 patch.object(trial, "new_run", return_value=run), patch.object(trial, "version", return_value=PIN), \
                 patch.object(trial, "save_new", side_effect=persist), \
+                patch.object(trial, "time", wraps=trial.time) as clock, \
                 patch.object(sys, "argv", argv + (["--live"] if live else [])), \
                 patch.object(sys.stdin, "isatty", return_value=True), patch.object(sys.stderr, "isatty", return_value=True), \
                 patch("builtins.input", side_effect=answer), patch("trial.getpass.getpass", return_value="fake@example.invalid"), \
@@ -215,6 +235,8 @@ class CleanupTrialTests(unittest.TestCase):
             session.cookies.save = Mock()
             result = trial.main()
         summary = json.loads((run / "summary.json").read_text())
+        if summary.get("blocked") == "AssertionError":
+            self.fail(output.getvalue())
         self.assertNotIn("SECRET", output.getvalue())
         self.assertNotIn(TARGET, output.getvalue())
         self.assertNotIn("fake@example.invalid", output.getvalue())
@@ -236,6 +258,18 @@ class CleanupTrialTests(unittest.TestCase):
         self.assertEqual((run / "recovery-original.jpg").read_bytes(), self.payload)
         self.assertFalse((run / "write-intent-private.json").exists())
 
+    def test_stale_preparation_stays_offline(self):
+        result, summary, state, run, authenticate = self.run_cli("stale_offline", live=False)
+        plan = json.loads((run / "offline-plan-private.json").read_text())
+        self.assertEqual(result, 0)
+        self.assertEqual(summary["scope"], "one_stale_tag_delete_trial")
+        self.assertEqual(plan["scope"], "one_stale_tag_delete")
+        self.assertFalse(summary["authentication_attempted"])
+        self.assertFalse(summary["stale_tag_delete_rejected"])
+        authenticate.assert_not_called()
+        self.assertEqual(state["calls"], [])
+        self.assertFalse((run / "write-intent-private.json").exists())
+
     def test_trial_preserves_and_restores_identity(self):
         for case in ("success", "lostafter", "replywrongid"):
             with self.subTest(case=case):
@@ -254,12 +288,51 @@ class CleanupTrialTests(unittest.TestCase):
                 intent = json.loads((run / "write-intent-private.json").read_text())
                 self.assertEqual(intent["plan_sha256"], hashlib.sha256(trial.canonical(intent["plan"]).encode()).hexdigest())
 
+    def test_stale_delete_outcomes(self):
+        for case in ("stale_conflict", "stale_accepted"):
+            with self.subTest(case=case):
+                result, summary, state, run, _ = self.run_cli(case)
+                self.assertEqual(result, 0, summary.get("finding", summary.get("blocked")))
+                self.assertEqual(summary["phase"], "completed")
+                self.assertEqual((state["writes"], state["gets"]), (1, 1))
+                self.assertEqual(state["lookups"], 4 if case == "stale_conflict" else 5)
+                self.assertFalse(state["removed"])
+                if case == "stale_conflict":
+                    self.assertEqual(summary["reply"], "CONFLICT")
+                    self.assertTrue(summary["stale_tag_delete_rejected"])
+                    self.assertTrue(summary["stale_delete_postcheck_completed"])
+                    self.assertFalse(summary["removal_metadata_observed"])
+                else:
+                    self.assertEqual(summary["reply"], "ACCEPTED")
+                    self.assertFalse(summary["stale_tag_delete_rejected"])
+                    self.assertTrue(summary["restored_album_membership_verified"])
+                    self.assertTrue(summary["preserved_originals_unchanged"])
+
+    def test_stale_delete_stops_safely(self):
+        cases = {"stale_nocycle": ("Trial cancelled", 0, 2),
+                 "stale_badfavorite": ("Favorite cycle did not change", 0, 3),
+                 "stale_sametag": ("Favorite cycle did not change", 0, 3),
+                 "stale_unknown": ("soft-delete metadata", 1, 4)}
+        for case, (finding, writes, lookups) in cases.items():
+            with self.subTest(case=case):
+                result, summary, state, run, _ = self.run_cli(case)
+                self.assertEqual(result, 1)
+                self.assertIn(finding, summary["finding"])
+                self.assertEqual((state["writes"], state["lookups"]), (writes, lookups))
+                self.assertEqual(state["gets"], 1)
+                self.assertLessEqual(state["writes"], 1)
+                self.assertEqual((run / "write-intent-private.json").exists(), bool(writes))
+
     def test_prewrite_guards_prevent_removal(self):
-        cases = {"scope": ("TrialBlocked", "Scope confirmation"), "wrongaccount": ("TrialBlocked", "Authenticated account"),
+        cases = {"scope": ("Cancelled", "Trial cancelled"), "scopeblank": ("Cancelled", "Trial cancelled"),
+                 "wrongaccount": ("TrialBlocked", "Authenticated account"),
                  "lookupscope": ("TrialBlocked", "Lookup returned"), "bytes": ("TrialBlocked", "Downloaded original differs"),
                  "getoversized": ("TrialBlocked", "download exceeded"), "gettimeout": ("Timeout", None),
                  "getredirect": ("TrialBlocked", "full response"), "getthrottled": ("ChangesThrottled", None),
-                 "preflightdrift": ("TrialBlocked", "changed while preserving"), "refuse": ("TrialBlocked", "Removal confirmation"),
+                 "preflightdrift": ("TrialBlocked", "changed while preserving"),
+                 "refuse": ("Cancelled", "Trial cancelled"), "refuseblank": ("Cancelled", "Trial cancelled"),
+                 "refuseinvalid": ("Cancelled", "Trial cancelled"), "refuseinterrupt": ("Cancelled", "Trial cancelled"),
+                 "expired": ("TrialBlocked", "Removal confirmation expired"),
                  "localdrift": ("TrialBlocked", "preserved original changed"), "planedit": ("TrialBlocked", "removal plan changed"),
                  "intentfailure": ("OSError", None)}
         for case, (error_type, finding) in cases.items():
@@ -271,8 +344,8 @@ class CleanupTrialTests(unittest.TestCase):
                 self.assertEqual(summary["blocked"], error_type)
                 if finding:
                     self.assertIn(finding, summary["finding"])
-                self.assertEqual(state["gets"], int(case not in ("scope", "wrongaccount", "lookupscope")))
-                if case == "scope":
+                self.assertEqual(state["gets"], int(case not in ("scope", "scopeblank", "wrongaccount", "lookupscope")))
+                if case in ("scope", "scopeblank"):
                     authenticate.assert_not_called()
                     self.assertFalse(summary["authentication_attempted"])
                 if case == "wrongaccount":
@@ -285,7 +358,8 @@ class CleanupTrialTests(unittest.TestCase):
     def test_uncertain_writes_never_retry(self):
         cases = {"conflict": "Removal was rejected", "lostbefore": "soft-delete metadata", "writethrottled": None,
                  "deletedunknown": "soft-delete metadata", "remainingdrift": "Remaining album metadata",
-                 "restorecancel": "Manual restore", "restoredrift": "Restored identity", "restoredotherdrift": "Restored identity"}
+                 "seencancel": "Trial cancelled", "restorecancel": "Trial cancelled",
+                 "restoredrift": "Restored identity", "restoredotherdrift": "Restored identity"}
         for case, finding in cases.items():
             with self.subTest(case=case):
                 result, summary, state, run, _ = self.run_cli(case)
