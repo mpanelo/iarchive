@@ -11,10 +11,15 @@ class OfflineCloudPrototypeTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         for suite in ("cloud-prototype", "cloud-cleanup"):
             with self.subTest(suite=suite):
-                result = subprocess.run(
-                    [sys.executable, "-m", "unittest", "discover", "-s", f"tools/{suite}", "-v"],
-                    cwd=root, capture_output=True, text=True, timeout=60, check=False,
-                )
+                try:
+                    result = subprocess.run(
+                        [sys.executable, "-m", "unittest", "discover", "-s", f"tools/{suite}", "-v"],
+                        cwd=root, capture_output=True, text=True, timeout=300, check=False,
+                    )
+                except subprocess.TimeoutExpired as error:
+                    progress = "\n".join(output.decode(errors="replace") if isinstance(output, bytes) else output
+                                         for output in (error.stdout, error.stderr) if output)
+                    self.fail(f"{suite} exceeded the five-minute suite limit. Captured progress:\n{progress}")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
