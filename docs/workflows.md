@@ -137,6 +137,12 @@ Use the [two-drive checks](windows-two-drive-test.md) with synthetic files first
 List cycles with `iarchive cycles`. The gallery's cycle selector changes which
 saved archive you review; it does not rescan its media.
 
+## Review cloud archive evidence
+
+Follow the [cloud review workflow](cloud-cleanup.md) to reconcile downloaded
+resources, save your selection and rehearse one cleanup request offline.
+Live cloud cleanup is unavailable; the rehearsal preserves both local copies.
+
 ## Later downloads
 
 Download into a separate folder and use a new cycle ID. Import and audit it with

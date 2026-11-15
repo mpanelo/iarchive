@@ -26,6 +26,12 @@ Local bytes, physical-drive independence and cloud coverage are separate results
 Two copies on one disk are not independent backups. Nothing here proves completed
 iPhone uploads, complete iCloud coverage or offsite protection.
 
+The separate [cleanup rehearsal](cloud-cleanup.md#rehearse-a-saved-selection)
+uses an in-memory cloud model. Its default drive topology is simulated; the
+optional OS check must prove distinct physical drives. Saved receipts never
+authorize cloud removal. iCloud accepted a stale-tag soft-delete in a disposable
+trial: a final metadata read cannot prevent an edit immediately before deletion.
+
 ## Browser and privacy
 
 Review listens only on `127.0.0.1`. It requires a session token and checks Host

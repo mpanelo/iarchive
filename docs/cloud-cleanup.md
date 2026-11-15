@@ -93,6 +93,49 @@ the drafts. No media is downloaded or removed. Matching metadata does not prove
 complete cloud coverage, independent drives or protection against later edits.
 The archive CLI still cannot authenticate or remove cloud items.
 
+## Rehearse a saved selection
+
+After saving your review draft, rehearse its exact selection offline:
+
+```sh
+python3 tools/cloud-cleanup/supervised.py --simulate --draft /path/to/draft.json
+```
+
+The helper rehashes both copies and runs the existing preflight against an
+in-memory cloud model. Check the selected and kept counts, then answer `y` to
+**Simulate this selection? [y/N]**. Enter cancels. Confirmation expires after two
+minutes. Changes to the selection, evidence or copies stop the rehearsal.
+
+It sends one mock soft-delete request for at most 100 selected items. Each item
+gets an accepted, rejected or unknown outcome. Lost replies, unexpected records
+and failed post-checks stay unknown; the helper never retries. Asset tags cannot
+prevent a concurrent iCloud edit. Local copies are preserved, and no cloud
+authentication or requests occur.
+
+Drive independence is modeled and labeled **SIMULATED; NOT VERIFIED**. To require
+the real deep verifier and fresh OS topology, add `--iarchive` with your executable:
+
+```powershell
+python tools/cloud-cleanup/supervised.py --simulate --draft 'D:\iarchive-artifacts\draft.json' --iarchive '.\target\release\iarchive.exe'
+```
+
+Use the saved draft path printed by your review. This check requires two distinct
+physical drives; unknown topology stops it. macOS cannot currently prove it.
+Cloud operations still use the offline model.
+
+Plans, journals and outcomes are saved under `cleanup` beside all three draft
+copies. Intent must reach every journal before the mock request. The helper
+prints the retained directory. Inspect it without resuming:
+
+```sh
+python3 tools/cloud-cleanup/supervised.py --inspect /path/to/cleanup/run
+```
+
+Starting the request marks every draft copy so rerunning the same draft is
+refused, including after a restart. Incomplete records remain unresolved.
+Inspection never retries, restores or
+approves a live operation. A read-only preflight receipt cannot authorize removal.
+
 ## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic
