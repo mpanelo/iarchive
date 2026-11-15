@@ -21,6 +21,8 @@ MAX_TARGETS = 100  # Our rehearsal bound, not a provider capability claim.
 LIMITS = {'live_execution': 'UNAVAILABLE', 'server_version_condition': 'NOT ENFORCED',
           'cloud_coverage': 'NOT VERIFIED', 'resource_completeness': 'NOT VERIFIED',
           'recovery_and_space_reclaimed': 'NOT VERIFIED'}
+CLOUD_MODE = 'SUPERVISED_ICLOUD_CLEANUP'
+CLOUD_LIMITS = {**LIMITS, 'live_execution': 'SEPARATE_APPROVAL_REQUIRED'}
 
 
 class Backups:
@@ -81,6 +83,17 @@ class MockRemoval:
             replies.append({'id': 'wrong-id' if fault == 'wrong_id' else key, 'status': 'accepted'})
         return replies
 
+    def before(self):
+        return self.metadata.snapshot()
+
+    def postcheck(self, draft, states):
+        done = {key for key, status in states.items() if status == 'accepted'}
+        expected = metadata_for(draft)
+        expected['assets'] = [a for a in expected['assets'] if a['id'] not in done]
+        trash = {a['id']: a for a in metadata_for(draft)['assets'] if a['id'] in done}
+        if canonical(ordered(self.metadata.snapshot())) != canonical(ordered(expected)) or self.trash != trash:
+            raise Blocked('Accepted reply did not establish the exact mock postcondition')
+
 
 def same_copies(outputs, name, expected):
     for output in outputs:
@@ -90,14 +103,29 @@ def same_copies(outputs, name, expected):
 
 class Cleanup:
     def __init__(self, session, provider, backups):
-        if type(provider) is not MockRemoval or type(backups) is not Backups:
-            raise Blocked('Only the offline removal model and bounded backup checker are supported')
+        self.cloud = type(provider) is not MockRemoval
+        if self.cloud:
+            from cloud_workflow import CloudCleanup
+            if type(provider) is not CloudCleanup:
+                raise Blocked('Use the offline removal model or connected cloud workflow')
+            if provider.draft != session.current:
+                raise Blocked('Connected provider differs from the saved selection')
+        if type(backups) is not Backups or self.cloud and backups.executable is None:
+            raise Blocked('Connected cleanup requires strict physical-drive verification')
         self.session, self.provider, self.backups = session, provider, backups
         self.gate = Preflight(session, provider.metadata)
         self.draft = self.gate.draft
         if not 0 < self.draft.data()['count'] <= MAX_TARGETS:
             raise Blocked('Select between one and 100 items for one rehearsal request')
         self.phase, self.outputs, self.plan = 'new', (), None
+        self.mode, self.limits = (CLOUD_MODE, CLOUD_LIMITS) if self.cloud else (MODE, LIMITS)
+        self._approval = None
+
+    def check_backups(self):
+        topology = self.backups.check(self.session)
+        if self.cloud and topology['physical_drives'] != 'VERIFIED BY OS TOPOLOGY':
+            raise Blocked('Connected cleanup requires verified physical drives')
+        return topology
 
     def publish(self, name, value):
         for output in self.outputs:
@@ -111,9 +139,12 @@ class Cleanup:
         try:
             if any(os.path.lexists(Path(p) / 'cleanup-started.json') for p in self.draft.data()['outputs']):
                 raise Blocked('This draft already started cleanup; inspect the retained run without retrying')
+            if self.cloud:
+                topology = self.check_backups()
             preflight = self.gate.prepare()
             self.receipt = self.gate.finish(preflight)
-            topology = self.backups.check(self.session)
+            if not self.cloud:
+                topology = self.check_backups()
             name, outputs = uuid.uuid4().hex, []
             for source in self.draft.data()['outputs']:
                 parent = safe_path(Path(source)) / 'cleanup'
@@ -132,11 +163,15 @@ class Cleanup:
                            'recordType': 'CPLAsset', 'recordName': a['id'],
                            'recordChangeTag': a['asset_change_tag'], 'fields': {'isDeleted': {'value': 1}}}}
                            for a in targets]}
-            data = {'schema': 1, 'mode': MODE, 'limits': dict(LIMITS), 'draft_sha256': self.draft.sha256,
+            if self.cloud and canonical(request) != canonical(self.provider.writer.request()):
+                raise Blocked('Connected request differs from the saved selection')
+            data = {'schema': 2 if self.cloud else 1, 'mode': self.mode, 'limits': dict(self.limits), 'draft_sha256': self.draft.sha256,
                     'count': draft['count'], 'kept': draft['kept'], 'request': request,
                     'preflight_sha256': preflight.sha256, 'backups': topology,
                     'outputs': list(map(str, self.outputs)), 'roots': list(map(str, self.session.roots)),
                     'created_at': datetime.now(timezone.utc).isoformat()}
+            if self.cloud:
+                data['draft'] = {'payload': self.draft.payload, 'sha256': self.draft.sha256}
             self.plan = Plan(canonical(data), digest(data))
             self.publish('plan.json', {'payload': self.plan.payload, 'sha256': self.plan.sha256})
             self.deadline = time.monotonic() + CHECK_SECONDS
@@ -146,6 +181,22 @@ class Cleanup:
             self.phase = 'blocked'
             raise
 
+    def confirm_and_execute(self):
+        if self.phase != 'prepared':
+            raise Blocked('Prepare a cleanup before confirming it')
+        plan = self.plan
+        data = plan.data()
+        print(f"Selected: {data['count']} items. Kept: {len(data['kept'])} items.")
+        print('One soft-delete request affects synced devices. Concurrent edits cannot be prevented.' if self.cloud
+              else 'One mock soft-delete request; local copies are preserved.')
+        try:
+            confirm('Move this selection to iCloud Recently Deleted?' if self.cloud else 'Simulate this selection?')
+        except Cancelled:
+            self.phase = 'cancelled'
+            raise
+        self._approval = plan
+        return self.execute(plan)
+
     def execute(self, plan):
         with self.session.lock:
             if self.phase != 'prepared':
@@ -154,6 +205,8 @@ class Cleanup:
             try:
                 if type(plan) is not Plan or plan != self.plan:
                     raise Blocked('Cleanup plan changed')
+                if self.cloud and self._approval != plan:
+                    raise Blocked('Connected cleanup requires final confirmation')
                 data = plan.data()
                 self.gate.check_selection()
                 same_copies(self.outputs, 'plan.json', {'payload': plan.payload, 'sha256': plan.sha256})
@@ -164,11 +217,11 @@ class Cleanup:
                                                        'receipt_sha256': digest(self.receipt)})
                 if any(list(safe_path(output / 'journal').iterdir()) for output in self.outputs):
                     raise Blocked('Cleanup already has a journal; never retry a started request')
-                topology = self.backups.check(self.session)
+                topology = self.check_backups()
                 if canonical(topology) != canonical(data['backups']):
                     raise Blocked('Backup topology changed')
-                if canonical(ordered(self.provider.metadata.snapshot())) != self.gate.expected_metadata:
-                    raise Blocked('Cloud model metadata changed before the request')
+                if canonical(ordered(self.provider.before())) != self.gate.expected_metadata:
+                    raise Blocked('Cloud metadata changed before the request')
                 self.gate.check_selection()
                 same_copies(self.outputs, 'plan.json', {'payload': plan.payload, 'sha256': plan.sha256})
                 if time.monotonic() >= self.deadline:
@@ -180,43 +233,50 @@ class Cleanup:
                     write_new(output / 'cleanup-started.json', canonical(marker))
                 same_copies(draft_outputs, 'cleanup-started.json', marker)
                 journal = Journal(self.outputs, plan)
-                journal.append(None, 'attempted', 'One frozen mock request; intent flushed before execution')
+                journal.append(None, 'attempted', 'One frozen request; intent flushed before execution')
                 # Read all durable intent copies back before crossing the write boundary.
                 read_events(self.outputs, plan)
                 states = {key: 'unknown' for key in self.draft.data()['selected']}
+                replies_sha, postcheck_sha = None, None
                 try:
                     stage = 'request'
+                    self.gate.check_selection()
+                    if time.monotonic() >= self.deadline:
+                        raise Blocked('Confirmation expired while persisting intent; no request sent')
                     replies = self.provider.remove(copy.deepcopy(data['request']))
                     stage = 'reply'
                     if (not isinstance(replies, list) or len(replies) != len(states)
                             or any(not isinstance(r, dict) or r.get('id') not in states for r in replies)
                             or len({r['id'] for r in replies}) != len(states)):
-                        raise Blocked('Mock reply identities are uncertain')
+                        raise Blocked('Reply identities are uncertain')
                     for reply in replies:
                         if reply == {'id': reply['id'], 'status': 'accepted'}:
                             states[reply['id']] = 'accepted'
-                        elif reply == {'id': reply['id'], 'error': 'CONFLICT'}:
+                        elif reply == {'id': reply['id'], 'error': 'CONFLICT'} or reply == {'id': reply['id'], 'status': 'rejected'}:
                             states[reply['id']] = 'rejected'
+                        elif reply == {'id': reply['id'], 'status': 'unknown'}:
+                            states[reply['id']] = 'unknown'
                         else:
-                            raise Blocked('Mock per-record reply is uncertain')
+                            raise Blocked('Per-record reply is uncertain')
+                    self.publish('replies.json', replies)
+                    replies_sha = digest(replies)
                     stage = 'postcheck'
-                    done = {key for key, status in states.items() if status == 'accepted'}
-                    expected = metadata_for(self.draft.data())
-                    expected['assets'] = [a for a in expected['assets'] if a['id'] not in done]
-                    trash = {a['id']: a for a in metadata_for(self.draft.data())['assets'] if a['id'] in done}
-                    if (canonical(ordered(self.provider.metadata.snapshot())) != canonical(ordered(expected))
-                            or self.provider.trash != trash):
-                        raise Blocked('Accepted reply did not establish the exact mock postcondition')
-                    finding = None
+                    observation = self.provider.postcheck(self.draft.data(), states)
+                    if observation is not None:
+                        self.publish('postcheck.json', observation)
+                        postcheck_sha = digest(observation)
+                    finding = 'Some request outcomes remain unresolved' if 'unknown' in states.values() else None
                 except (*ERRORS, TimeoutError, KeyboardInterrupt):
                     states = dict.fromkeys(states, 'unknown')
                     finding = {'request': 'Request outcome unavailable', 'reply': 'Reply identities or outcomes uncertain',
                                'postcheck': 'Exact postcondition not established'}[stage]
                 for key, status in states.items():
-                    journal.append(key, status, 'Mock outcome only; no retry or automatic restore')
-                result = {'mode': MODE, 'plan_sha256': plan.sha256, 'outcomes': states,
+                    journal.append(key, status, 'No retry or automatic restore')
+                result = {'mode': self.mode, 'plan_sha256': plan.sha256, 'outcomes': states,
                           'complete': all(status == 'accepted' for status in states.values()),
-                          'request_count': 1, 'backups': topology, 'limits': dict(LIMITS), 'finding': finding}
+                          'request_count': self.provider.writer.writes if self.cloud else len(self.provider.requests),
+                          'backups': topology, 'limits': dict(self.limits), 'finding': finding,
+                          'replies_sha256': replies_sha, 'postcheck_sha256': postcheck_sha}
                 self.publish('result.json', result)
                 journal.append(None, 'completed' if result['complete'] else 'stopped', 'Result retained at every location')
                 self.publish('complete.json', {'plan_sha256': plan.sha256, 'result_sha256': digest(result)})
@@ -245,19 +305,26 @@ def read_events(outputs, plan):
     return events
 
 
-def inspect_run(path):
-    """Read saved outcomes only. Never resume or issue a provider request."""
+def load_run(path):
     path = safe_path(path)
     envelope = evidence.object_value(evidence.load_input(path / 'plan.json')[0])
     plan = Plan(envelope['payload'], envelope['sha256'])
     data = plan.data()
-    if data.get('mode') != MODE or data.get('limits') != LIMITS or data.get('schema') != 1:
-        raise Blocked('Not a supervised offline cleanup record')
+    formats = {MODE: (1, LIMITS), CLOUD_MODE: (2, CLOUD_LIMITS)}
+    if data.get('mode') not in formats or (data.get('schema'), data.get('limits')) != formats[data['mode']]:
+        raise Blocked('Not a supported supervised cleanup record')
     outputs = tuple(safe_path(Path(p)) for p in data['outputs'])
     if len(outputs) != 3 or not any(os.path.samefile(path, output) for output in outputs):
         raise Blocked('Inspect a published cleanup directory')
     disjoint((*[safe_path(Path(p)) for p in data['roots']], *outputs))
     same_copies(outputs, 'plan.json', envelope)
+    return plan, outputs
+
+
+def inspect_run(path):
+    """Read saved outcomes only. Never resume or issue a provider request."""
+    plan, outputs = load_run(path)
+    data = plan.data()
     events = read_events(outputs, plan)
     if not events:
         if any(os.path.lexists(output / name) for output in outputs for name in ('result.json', 'complete.json')):
@@ -274,8 +341,17 @@ def inspect_run(path):
     targets = {op['record']['recordName'] for op in data['request']['operations']}
     outcomes = evidence.object_value(result.get('outcomes'))
     complete = all(status == 'accepted' for status in outcomes.values())
-    if (result.get('plan_sha256') != plan.sha256 or result.get('mode') != MODE or result.get('limits') != LIMITS
-            or result.get('request_count') != 1 or result.get('complete') is not complete
+    for name in ('replies', 'postcheck'):
+        expected_sha = result.get(name + '_sha256')
+        if expected_sha is not None:
+            value = evidence.load_input(outputs[0] / (name + '.json'))[0]
+            same_copies(outputs, name + '.json', value)
+            if digest(value) != expected_sha:
+                raise Blocked('Cleanup observation digest changed')
+    if (result.get('plan_sha256') != plan.sha256 or result.get('mode') != data['mode'] or result.get('limits') != data['limits']
+            or type(result.get('request_count')) is not int or result['request_count'] not in (0, 1)
+            or result['request_count'] == 0 and any(status != 'unknown' for status in outcomes.values())
+            or result.get('complete') is not complete
             or result.get('backups') != data['backups'] or set(outcomes) != targets
             or any(status not in ('accepted', 'rejected', 'unknown') for status in outcomes.values())
             or len(events) != len(targets) + 2 or events[0].get('status') != 'attempted'
@@ -313,10 +389,7 @@ def main():
         print('Concurrent iCloud edits cannot be prevented. Asset tags do not enforce a version condition.')
         print('Physical drives: OS verification required.' if args.iarchive else 'Physical drives: simulated; NOT VERIFIED.')
         plan = cleanup.prepare()
-        print(f"Selected: {plan.data()['count']} items. Kept: {len(plan.data()['kept'])} items.")
-        print('One mock soft-delete request; local copies are preserved.')
-        confirm('Simulate this selection?')
-        result = cleanup.execute(plan)
+        result = cleanup.confirm_and_execute()
         print('Rehearsal completed.' if result['complete'] else 'Rehearsal stopped. Inspect outcomes; never retry blindly.')
         return int(not result['complete'])
     except Cancelled:

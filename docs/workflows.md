@@ -141,7 +141,8 @@ saved archive you review; it does not rescan its media.
 
 Follow the [cloud review workflow](cloud-cleanup.md) to reconcile downloaded
 resources, save your selection and rehearse one cleanup request offline.
-Live cloud cleanup is unavailable; the rehearsal preserves both local copies.
+Its separate Windows launcher supports controlled cleanup trials after physical
+backup checks. The `iarchive` executable has no cloud removal command.
 
 ## Later downloads
 

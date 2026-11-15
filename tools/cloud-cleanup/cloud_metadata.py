@@ -26,6 +26,20 @@ SOURCE = 'READ_ONLY_ICLOUD'
 MAX_REQUESTS = 50
 
 
+def assets_from_report(report):
+    assets = []
+    for asset in report['assets']:
+        resources = []
+        for index in asset['resource_indices']:
+            item = report['resources'][index]
+            resources.append({'resource_record_type': item['record_type'], 'resource_record_id': item['record_id'],
+                              'resource_field': item['resource_field'], 'owner_change_tag': item['record_change_tag'],
+                              **{key: item[key] for key in ('file_type', 'size', 'provider_checksum_opaque')}})
+        assets.append({'id': asset['asset_id'], 'resources': resources,
+                       **{key: asset[key] for key in ('master_id', 'asset_change_tag', 'master_change_tag')}})
+    return assets
+
+
 def require_provider():
     try:
         if version('icloudpd') == PIN:
@@ -38,7 +52,7 @@ def require_provider():
 class CloudMetadata:
     """Two single-use snapshots of one frozen album, with no upstream retries."""
 
-    def __init__(self, service, root, zones, album, draft, pacer, output=None):
+    def __init__(self, service, root, zones, album, draft, pacer, output=None, *, allow_empty=False):
         require_provider()
         self.scope = json.loads(canonical(draft['scope']))
         primary = [item['zone_id'] for item in zones.get('private', [])
@@ -47,7 +61,7 @@ class CloudMetadata:
                 or authenticated_account(service) != self.scope['account_id']):
             raise Blocked('Authenticated account or private zone differs from the draft')
         self.count = len(draft['assets'])
-        if not 1 <= self.count <= MAX_ASSETS or not album:
+        if not (0 if allow_empty else 1) <= self.count <= MAX_ASSETS or not album:
             raise Blocked('A bounded named album is required')
         self.service, self.root, self.album, self.pacer = service, root.rstrip('/'), album, pacer
         self.query = parse_qs(urlencode({**service.params, 'remapEnums': True, 'getCurrentSyncToken': True}, doseq=True))
@@ -94,6 +108,8 @@ class CloudMetadata:
         if self.stopped or self.reads >= 2:
             raise Blocked('Read-only metadata session is closed; start a new preflight')
         self.reads += 1
+        old_logging = logging.root.manager.disable
+        logging.disable(logging.CRITICAL)
         try:
             with self.transport():
                 if find_album(self.service, self.root, self.scope['zone_id'], self.album) != self.scope['album_id']:
@@ -107,17 +123,7 @@ class CloudMetadata:
             report = build_resource_report(passes[-1])
             if report['findings']:
                 raise Blocked('Read-only resource metadata has unresolved findings')
-            assets = []
-            for asset in report['assets']:
-                resources = []
-                for index in asset['resource_indices']:
-                    item = report['resources'][index]
-                    resources.append({'resource_record_type': item['record_type'], 'resource_record_id': item['record_id'],
-                                      'resource_field': item['resource_field'], 'owner_change_tag': item['record_change_tag'],
-                                      **{key: item[key] for key in ('file_type', 'size', 'provider_checksum_opaque')}})
-                assets.append({'id': asset['asset_id'], 'resources': resources,
-                               **{key: asset[key] for key in ('master_id', 'asset_change_tag', 'master_change_tag')}})
-            result = {'source': SOURCE, 'scope': self.scope, 'assets': assets, 'complete': True}
+            result = {'source': SOURCE, 'scope': self.scope, 'assets': assets_from_report(report), 'complete': True}
             if self.output is not None:
                 save_new(self.output / f'metadata-{self.reads}-private.json', result)
             return result
@@ -125,6 +131,8 @@ class CloudMetadata:
             self.stopped = True
             # Provider exceptions may contain URLs, response bodies or credentials.
             raise Blocked('Read-only metadata unavailable, changed, throttled or outside scope; no retry attempted') from None
+        finally:
+            logging.disable(old_logging)
 
 
 @contextmanager

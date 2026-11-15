@@ -4,6 +4,7 @@ from contextlib import contextmanager, redirect_stdout
 import copy
 import io
 import json
+import logging
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -65,6 +66,8 @@ class CloudMetadataTests(unittest.TestCase):
         return cloud.CloudMetadata(self.service, album.ROOT, self.zones, album.NAME, self.data, conflict.Pacer())
 
     def send(self, adapter, request, **kwargs):
+        if getattr(self, 'log_transport', False):
+            logging.getLogger('iarchive.synthetic-metadata-wire').warning('SECRET_UPSTREAM_LOG')
         self.assertEqual(request.method, 'POST')
         self.assertEqual(kwargs['timeout'], (10, 30))
         self.assertIs(kwargs['verify'], True)
@@ -98,9 +101,14 @@ class CloudMetadataTests(unittest.TestCase):
         provider.output = self.fixture.root / 'metadata'
         provider.output.mkdir()
         gate = preflight.Preflight(self.review, provider)
-        plan = gate.prepare()
+        self.log_transport = True
+        old_logging = logging.root.manager.disable
+        with self.assertNoLogs('iarchive.synthetic-metadata-wire'):
+            plan = gate.prepare()
         self.assertEqual(plan.data()['count'], 1)
-        receipt = gate.finish(plan)
+        with self.assertNoLogs('iarchive.synthetic-metadata-wire'):
+            receipt = gate.finish(plan)
+        self.assertEqual(logging.root.manager.disable, old_logging)
         previews = [resource for resource in gate.plan.data()['targets'][0]['resources']
                     if resource['resource_field'] == 'resJPEGThumbRes']
         self.assertEqual(len(previews), 2)

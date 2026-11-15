@@ -55,6 +55,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/windows/test.ps1 -ExternalDrives 'C:'
+      - name: Test cloud launcher without account access
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/tests/cloud-cleanup.Tests.ps1
+      - name: Test cloud launcher in Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scripts/windows/tests/cloud-cleanup.Tests.ps1
       - name: Test replica acceptance workflow
         if: runner.os == 'Windows'
         shell: pwsh

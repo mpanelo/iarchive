@@ -11,8 +11,10 @@
 - Quarantine requires an exact current confirmation, known metadata relationships,
   successful image analysis, and fresh verification of the entire raw backup.
   Unknown or unassigned variants block moves. Restore never overwrites conflicts.
-- Cloud authentication/downloads and permanent deletion are unavailable in the
-  CLI. There is no telemetry or media upload.
+- The `iarchive` executable cannot authenticate, download or remove cloud items.
+  Its separate Windows cleanup helper requires fresh physical-drive verification
+  and explicit sign-in and removal confirmations. It never purges. There is no
+  telemetry or media upload.
 
 ## What verification means
 

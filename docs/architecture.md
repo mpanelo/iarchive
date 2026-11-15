@@ -12,7 +12,7 @@
 
 Rust uses edition 2024 with a declared minimum of 1.89. That minimum is not yet
 independently tested. Dependencies include bundled rusqlite, clap, serde/TOML,
-SHA-256, walkdir and fs2. Cloud operations are unavailable; the supplied inventory
+SHA-256, walkdir and fs2. Cloud operations are unavailable in the archive CLI; its inventory
 provider returns an error and exposes no deletion method.
 
 ## State
@@ -106,6 +106,50 @@ group ID/type/version/explanation and recorded member metadata/features.
 Regenerated groups cannot inherit old notes through reused IDs. Reset clears
 the current note while retaining history. Notes do not change replica completion;
 future whole-database backups include them.
+
+## Separate cloud cleanup transport
+
+`tools/cloud-cleanup/cloud_removal.py` binds one soft-delete request to the exact
+asset IDs, tags, account and private zone of a saved review. It does not itself
+authenticate or approve removal. The separate guided launcher supplies those
+steps. Development uses
+mocked HTTP; the command-line rehearsal still uses its in-memory provider.
+
+The caller must supply fresh backup/preflight checks, confirmation and durable
+intent before a write. The adapter permits at most 100 selected assets and one
+write attempt. Shared pacing starts requests at least one second apart. Reads
+and writes use verified TLS, no redirects or automatic retries, 10/30-second
+connection/read timeouts, and 256 KiB/45-second response limits. Throttling stops
+later requests; an expired session requires separate recovery authentication.
+
+Per-record replies distinguish accepted, rejected and unknown. Acceptance alone
+does not establish observed deletion or safe recovery. A recovery-only instance
+cannot write; it allows two lookups of the same target/master IDs. Returned
+metadata excludes signed URLs, wrapping keys and captions. Missing records or
+ambiguous flags stay unresolved. Target lookups do not prove album membership,
+complete resource coverage or protection against concurrent edits. See the
+[recorded stale-tag result](cloud-cleanup-trial.md#stale-tag-jpeg).
+
+`cloud_workflow.py` connects that transport to `supervised.Cleanup`. The connected
+path requires the same saved draft, fresh OS-verified physical backups, matching
+album metadata, and a final default-No confirmation. Simulated topology is
+refused before cloud reads. Exclusive draft markers and mirrored intent precede
+the single write attempt; confirmation is checked again after intent publication.
+Replies and post-checks are retained separately from final per-item outcomes.
+Selected resources and the remaining album must match; unknown replies are never
+promoted to success by a later observation.
+
+Recovery uses a recovery-only transport and the frozen draft embedded in the
+attempted plan. It publishes fresh target facts in three immutable recovery
+bundles. It does not rewrite the original outcomes, clear start markers, restore,
+or retry. `scripts/windows/cloud-cleanup.ps1` launches `tools/cloud-cleanup/run.py`
+in the pinned cloud environment, with process-only settings. Local evidence and
+strict drive proof precede authentication. Cleanup and recovery have separate
+sign-in prompts; only cleanup offers a final removal confirmation. The launcher
+records safe session summaries and never calls system prerequisite installers.
+Connected development checks use synthetic files, modeled OS topology and mocked
+HTTP. Actual cloud access requires separate approval; the read-only preflight
+authentication context is not used for writes.
 
 ## Limits
 

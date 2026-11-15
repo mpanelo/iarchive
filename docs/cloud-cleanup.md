@@ -1,6 +1,9 @@
 # Cloud cleanup review
 
-These helpers save local review notes. They never remove items from iCloud.
+Review and rehearsal commands leave iCloud unchanged. The separate Windows
+launcher can move a confirmed selection to Recently Deleted after fresh backup
+checks. Live cleanup is under evaluation; use only a separately approved
+disposable selection until the connected two-drive trial is recorded.
 
 ## Review matched archive items
 
@@ -136,6 +139,47 @@ refused, including after a restart. Incomplete records remain unresolved.
 Inspection never retries, restores or
 approves a live operation. A read-only preflight receipt cannot authorize removal.
 
+## Windows cleanup trial
+
+Run [Windows setup](windows-testing.md) first. Save a review draft using the
+workflow above, then run from the checkout:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\scripts\windows\cloud-cleanup.ps1
+```
+
+1. Paste the saved `draft.json` path. Both physical drives must be connected.
+2. The helper freshly verifies both copies and OS drive topology before sign-in.
+3. Enter the exact iCloud album name. Answer `y` to sign in, then enter credentials
+   and any verification code in Terminal.
+4. After fresh cloud and backup checks, review the selected and kept counts.
+   Answer `y` to move that selection to Recently Deleted. Enter cancels.
+
+The helper sends one bounded soft-delete request and checks the target records
+and remaining album. Concurrent edits cannot be prevented. It preserves local
+copies and never purges, retries or restores automatically. A stopped or unknown
+result requires inspection; rerunning the same draft is refused. Keep Terminal
+output, account sessions and all saved records private.
+
+### Read-only recovery
+
+Reconnect both drives so all three record copies are readable, then run:
+
+```powershell
+.\scripts\windows\cloud-cleanup.ps1 -Recover
+```
+
+Paste the attempted cleanup directory printed by the earlier run. Answer `y`
+to sign in for target lookups only. Recovery records fresh observations beside
+all three copies and prints their path. It does not retry, restore, clear intent
+or change the original outcomes. Inspect Recently Deleted manually and restore
+the disposable test item there when required. Never empty Recently Deleted for
+this trial.
+
+Tools and temporary files stay in the checkout. The launcher restores its
+process environment when it exits; see the [technical boundary](architecture.md#separate-cloud-cleanup-transport).
+
 ## Synthetic demo
 
 This is an **offline demo**, not a cloud deletion command. It creates synthetic
@@ -190,8 +234,8 @@ A preflight check cannot prevent an edit between the check and removal. The
 mock deliberately accepts that race; a failed post-check stops subsequent
 targets but cannot undo an accepted request.
 
-Archive cleanup still needs separate implementation and approval, verified
-resource bindings on both drives, and explicit acceptance of this race. The
+Live archive cleanup still needs a separately approved connected trial, the
+final two-drive check, and explicit acceptance of this race. The
 [one-photo trial](cloud-cleanup-trial.md#recorded-result) records the bounded
 soft-delete/recovery evidence and remaining gaps. It does not enable archive
 cleanup. No automatic emptying of Recently Deleted is planned.
