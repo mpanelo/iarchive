@@ -181,6 +181,18 @@ function New-ReplicaProcess {
     return $process
 }
 
+function Get-CopyPartialLength {
+    param([string]$Path)
+    $null = Assert-SafeDirectory ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path)))
+    $attributes = [IO.File]::GetAttributes($Path)
+    Assert-Check (-not ($attributes -band ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint))) 'Unsafe copy partial.'
+    # Directory enumeration can cache an open writer's old size on Windows.
+    # Share delete as well as read/write so this probe cannot block publication.
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { return $stream.Length } finally { $stream.Dispose() }
+}
+
 function Invoke-InterruptedCopy {
     param([string]$Exe, [string[]]$ArgumentList, [string]$PartialRoot,
         [long]$ExpectedBytes, [string]$Reports, [int]$TimeoutSeconds = 180)
@@ -195,11 +207,20 @@ function Invoke-InterruptedCopy {
         $stderr = $process.StandardError.ReadToEndAsync()
         $timer = [Diagnostics.Stopwatch]::StartNew()
         while (-not $process.HasExited -and $timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-            foreach ($directory in Get-ChildItem -LiteralPath $PartialRoot -Directory -Filter 'partials-*') {
+            foreach ($directory in Get-ChildItem -LiteralPath $PartialRoot -Directory -Filter 'partials-*' -Force) {
                 Assert-Check (-not ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'Linked partial directory.'
-                foreach ($partial in Get-ChildItem -LiteralPath $directory.FullName -File -Filter '*.partial') {
+                foreach ($partial in Get-ChildItem -LiteralPath $directory.FullName -File -Filter '*.partial' -Force) {
                     Assert-Check (-not ($partial.Attributes -band [IO.FileAttributes]::ReparsePoint)) 'Linked copy partial.'
-                    if ($partial.Length -gt 0 -and $partial.Length -lt $ExpectedBytes) {
+                    try {
+                        $length = Get-CopyPartialLength $partial.FullName
+                    } catch {
+                        $failure = $_.Exception.GetBaseException()
+                        if ($failure -is [IO.FileNotFoundException] -or $failure -is [IO.DirectoryNotFoundException]) {
+                            continue # The child may have published it since enumeration.
+                        }
+                        throw
+                    }
+                    if ($length -gt 0 -and $length -lt $ExpectedBytes) {
                         $observed = $partial.FullName
                         # This Process object owns exactly the child started above.
                         $process.Kill()
@@ -214,13 +235,13 @@ function Invoke-InterruptedCopy {
         Assert-Check ($null -ne $observed) 'No in-progress partial was caught; try a larger interruption fixture.'
         Assert-Check ($process.WaitForExit(10000)) 'Interrupted child did not exit.'
         Assert-Check ($process.ExitCode -ne 0) 'Child completed before it could be interrupted.'
-        $partial = Get-Item -LiteralPath $observed
-        Assert-Check ($partial.Length -gt 0 -and $partial.Length -lt $ExpectedBytes) 'Copy finished before interruption.'
+        $length = Get-CopyPartialLength $observed
+        Assert-Check ($length -gt 0 -and $length -lt $ExpectedBytes) 'Copy finished before interruption.'
         return [pscustomobject]@{
             process_id = $process.Id
             exit_code = $process.ExitCode
             partial = $observed
-            partial_bytes = $partial.Length
+            partial_bytes = $length
             partial_sha256 = (Get-FileHash -LiteralPath $observed -Algorithm SHA256).Hash
         }
     } finally {

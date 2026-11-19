@@ -123,14 +123,30 @@ try {
         $root = New-FreshDirectory (Join-Path $fixtures 'process with spaces')
         $partials = New-FreshDirectory (Join-Path $root 'partials-test')
         $reports = New-FreshDirectory (Join-Path $root 'reports')
+        $cachedPath = Join-Path $root 'cached-size.partial'
+        $writer = [IO.File]::Open($cachedPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        try {
+            $cached = Get-Item -LiteralPath $cachedPath
+            Assert-Check ($cached.Length -eq 0) 'Cached-size fixture was not empty.'
+            $writer.Write([byte[]]::new(1MB), 0, 1MB)
+            $writer.Flush()
+            Assert-Check ($cached.Length -eq 0) 'Fixture did not retain a cached directory size.'
+            Assert-Check ((Get-CopyPartialLength $cached.FullName) -eq 1MB) 'Partial probe used the cached size instead of the open file.'
+        } finally { $writer.Dispose() }
         $childScript = Join-Path $root ('synthetic child ' + [char]0x2603 + '.ps1')
         [IO.File]::WriteAllText($childScript, @'
 param([string]$Partial)
 [Console]::Out.WriteLine('child-pid:' + $PID)
 [Console]::Out.WriteLine('synthetic stdout')
 [Console]::Error.WriteLine('synthetic stderr')
-[IO.File]::WriteAllBytes($Partial, [byte[]]::new(1MB))
-Start-Sleep -Seconds 30
+$stream = [IO.File]::Open($Partial, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+    ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+try {
+    $stream.Write([byte[]]::new(1MB), 0, 1MB)
+    $stream.Flush()
+    Start-Sleep -Seconds 30
+} finally { $stream.Dispose() }
 '@)
         $shell = (Get-Process -Id $PID).Path
         $otherPartial = Join-Path $root 'unrelated.partial'

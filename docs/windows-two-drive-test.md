@@ -56,14 +56,15 @@ This stops its own copy process while a generated 512 MiB file is incomplete,
 then resumes and verifies the copy. The old partial must stay unchanged outside
 media. It does not test unplugging a drive.
 
-If the copy finishes too quickly, retry with a larger file:
+If no incomplete partial is caught, repeat this step with a larger file:
 
 ```powershell
 .\scripts\windows\test-two-drive-interruption.ps1 -PrimaryDrive 'D:' -SecondaryDrive 'E:' -InterruptionMiB 1024
 ```
 
-Sizes from 64–2048 MiB are supported. Retries use fresh folders; step 3 need not
-be repeated. Both drive scripts must pass.
+Sizes from 64–2048 MiB are supported. Retries use fresh folders; keep the results
+of other passing steps. A completed copy does not prove interruption or resume.
+Both drive scripts must pass.
 
 ## 5. Review, quarantine and restore
 

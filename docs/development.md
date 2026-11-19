@@ -112,6 +112,28 @@ Raw reports remain local and untracked:
 .smoke/two-drive-interruption-<run-id>/
 ```
 
+### Windows two-drive run — 2026-11-19 (UTC)
+
+User-supplied synthetic reports covered commit
+`f2f78b5c748393419357148c6b00c3bcbb56455d` on Windows PowerShell 5.1.26100.9818.
+Windows reported D: and E: on distinct physical disks (1 and 2).
+
+| Check | Result |
+| --- | --- |
+| Full Windows checks | Passed, including local, D: and E: smoke tests. |
+| Copy and recovery | Passed; 12 files verified and both backup bundles restored into separate state directories. |
+| Failure guards | Corruption, missing-file and unavailable-folder checks passed. Restored directory identity stayed stable. |
+| Review and restore | Passed; three metadata groups, four quarantined/restored files and two cycles. Download recovery passed with two unchanged-analysis cache hits. |
+| Interruption | **NOT VERIFIED.** The 512 MiB replication run completed and byte verification passed, but the watcher never observed an incomplete partial. |
+
+The interruption run lasted about 32 seconds in total; the reports do not isolate
+copy duration or prove why observation failed. The watcher used directory-listed
+`FileInfo.Length`, which can be cached. It now queries an open file handle; see
+[Microsoft's file-size documentation](https://learn.microsoft.com/en-us/dotnet/api/system.io.fileinfo.length).
+Windows retesting of that change remains pending. Repeat only the interruption
+step and retain the other passing results. Raw reports remain private and
+untracked. No live cloud cleanup was tested by these scripts.
+
 ### macOS gallery and script checks — 2026-10-11
 
 Firefox displayed synthetic JPEG/HEIC previews side by side. Saving a flag updated
